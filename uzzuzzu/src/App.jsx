@@ -9,6 +9,10 @@ import {
   Plus,
   Pencil,
   ArrowLeft,
+  Briefcase,
+  Coffee,
+  Wallet,
+  Receipt,
 } from "lucide-react";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -25,6 +29,24 @@ const PALETTE = [
   "#4a5568",
 ];
 
+// 휴무 카테고리
+const OFFDAY_TYPES = [
+  { id: "holiday", label: "휴일", color: "#3b5998", short: "휴" },
+  { id: "company_off", label: "회사휴무", color: "#6b4c7a", short: "회" },
+  { id: "hospital", label: "병원", color: "#c53030", short: "병" },
+  { id: "personal", label: "개인업무", color: "#c69a1f", short: "개" },
+  { id: "other", label: "기타", color: "#8c8070", short: "기" },
+];
+
+// 경비 분류
+const EXPENSE_TYPES = [
+  { id: "transport", label: "교통비", icon: "🚗" },
+  { id: "meal", label: "식대", icon: "🍱" },
+  { id: "material", label: "자재비", icon: "🔧" },
+  { id: "gear", label: "장비·작업복", icon: "👷" },
+  { id: "other", label: "기타", icon: "📝" },
+];
+
 const C = {
   bg: "#f4efe6",
   surface: "#faf6ed",
@@ -39,6 +61,8 @@ const C = {
   accentDark: "#8e2a14",
   green: "#2d5f4e",
   greenSoft: "#e0ebe5",
+  orange: "#c47533",
+  orangeSoft: "#f5e9dc",
   sun: "#c53030",
   sat: "#2b6cb0",
 };
@@ -56,7 +80,8 @@ const isSameDay = (a, b) => dateKey(a) === dateKey(b);
 const won = (n) => Math.round(n).toLocaleString("ko-KR");
 const fmtUnits = (n) =>
   Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
-const genId = () => `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+const genId = (prefix = "s") =>
+  `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 const suggestAbbr = (name) => {
   if (!name) return "";
   const cleaned = name.replace(/\s+/g, "");
@@ -71,7 +96,7 @@ const tint = (hex, alpha) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-// ===== localStorage wrapper (replaces window.storage from Claude artifact) =====
+// ===== localStorage wrapper =====
 const storage = {
   get: (key) => {
     try {
@@ -92,18 +117,32 @@ export default function App() {
   const today = new Date();
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [sites, setSites] = useState([]);
-  const [workUnits, setWorkUnits] = useState({});
+  const [workUnits, setWorkUnits] = useState({}); // { dateKey: {siteId, value} }
+  const [offDays, setOffDays] = useState({}); // { dateKey: {type, memo} }
+  const [expenses, setExpenses] = useState({}); // { dateKey: [{id, type, amount, memo, siteId|null}] }
 
+  // Tab in day modal: "work" | "off" | "expense"
   const [selectedKey, setSelectedKey] = useState(null);
+  const [modalTab, setModalTab] = useState("work");
+
+  // Work tab state
   const [draftSiteId, setDraftSiteId] = useState(null);
   const [inputValue, setInputValue] = useState("");
+
+  // Off tab state
+  const [draftOffType, setDraftOffType] = useState("holiday");
+  const [draftOffMemo, setDraftOffMemo] = useState("");
 
   const [showSitesList, setShowSitesList] = useState(false);
   const [editingSite, setEditingSite] = useState(null);
   const [confirmDeleteSite, setConfirmDeleteSite] = useState(null);
 
+  // Expense editing
+  const [editingExpense, setEditingExpense] = useState(null); // {dateKey, expense} or {dateKey, new: true}
+
   const [loaded, setLoaded] = useState(false);
 
+  // Google Fonts
   useEffect(() => {
     const link = document.createElement("link");
     link.rel = "stylesheet";
@@ -117,9 +156,12 @@ export default function App() {
     };
   }, []);
 
+  // Load
   useEffect(() => {
     let loadedSites = null;
     let loadedWU = null;
+    let loadedOff = null;
+    let loadedExp = null;
 
     try {
       const r = storage.get("uzzuzzu:sites");
@@ -128,6 +170,14 @@ export default function App() {
     try {
       const r = storage.get("uzzuzzu:workUnits");
       if (r?.value) loadedWU = JSON.parse(r.value);
+    } catch {}
+    try {
+      const r = storage.get("uzzuzzu:offDays");
+      if (r?.value) loadedOff = JSON.parse(r.value);
+    } catch {}
+    try {
+      const r = storage.get("uzzuzzu:expenses");
+      if (r?.value) loadedExp = JSON.parse(r.value);
     } catch {}
 
     if (!loadedSites) {
@@ -143,6 +193,8 @@ export default function App() {
 
     setSites(loadedSites || []);
     setWorkUnits(loadedWU || {});
+    setOffDays(loadedOff || {});
+    setExpenses(loadedExp || {});
     setLoaded(true);
   }, []);
 
@@ -150,17 +202,36 @@ export default function App() {
     if (!loaded) return;
     storage.set("uzzuzzu:sites", JSON.stringify(sites));
   }, [sites, loaded]);
-
   useEffect(() => {
     if (!loaded) return;
     storage.set("uzzuzzu:workUnits", JSON.stringify(workUnits));
   }, [workUnits, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    storage.set("uzzuzzu:offDays", JSON.stringify(offDays));
+  }, [offDays, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    storage.set("uzzuzzu:expenses", JSON.stringify(expenses));
+  }, [expenses, loaded]);
 
   const siteById = useMemo(() => {
     const m = {};
     for (const s of sites) m[s.id] = s;
     return m;
   }, [sites]);
+
+  const offTypeById = useMemo(() => {
+    const m = {};
+    for (const t of OFFDAY_TYPES) m[t.id] = t;
+    return m;
+  }, []);
+
+  const expTypeById = useMemo(() => {
+    const m = {};
+    for (const t of EXPENSE_TYPES) m[t.id] = t;
+    return m;
+  }, []);
 
   const cells = useMemo(() => {
     const year = cursor.getFullYear();
@@ -186,8 +257,11 @@ export default function App() {
         gross: 0,
         net: 0,
         tax: 0,
+        expenses: 0,
       };
     }
+    let unsitedExpenses = 0; // 현장 미지정 경비
+
     const entries = [];
     for (const [k, e] of Object.entries(workUnits)) {
       if (!e || typeof e.value !== "number" || e.value <= 0) continue;
@@ -201,6 +275,47 @@ export default function App() {
       ps.gross += e.value * site.rate;
       entries.push({ key: k, date: d, value: e.value, site });
     }
+
+    // Expenses
+    const expEntries = [];
+    let totalExpenses = 0;
+    const expensesByType = {};
+    for (const t of EXPENSE_TYPES) expensesByType[t.id] = 0;
+
+    for (const [k, list] of Object.entries(expenses)) {
+      if (!Array.isArray(list)) continue;
+      const d = parseKey(k);
+      if (d.getFullYear() !== year || d.getMonth() !== month) continue;
+      for (const item of list) {
+        if (!item || typeof item.amount !== "number" || item.amount <= 0) continue;
+        totalExpenses += item.amount;
+        expensesByType[item.type] = (expensesByType[item.type] || 0) + item.amount;
+        if (item.siteId && perSiteMap[item.siteId]) {
+          perSiteMap[item.siteId].expenses += item.amount;
+        } else {
+          unsitedExpenses += item.amount;
+        }
+        expEntries.push({ key: k, date: d, ...item });
+      }
+    }
+    expEntries.sort((a, b) => a.date - b.date);
+
+    // Off days
+    const offEntries = [];
+    let totalOffDays = 0;
+    const offByType = {};
+    for (const t of OFFDAY_TYPES) offByType[t.id] = 0;
+
+    for (const [k, e] of Object.entries(offDays)) {
+      if (!e || !e.type) continue;
+      const d = parseKey(k);
+      if (d.getFullYear() !== year || d.getMonth() !== month) continue;
+      totalOffDays += 1;
+      offByType[e.type] = (offByType[e.type] || 0) + 1;
+      offEntries.push({ key: k, date: d, ...e });
+    }
+    offEntries.sort((a, b) => a.date - b.date);
+
     for (const id in perSiteMap) {
       const p = perSiteMap[id];
       p.net = p.gross / 1.033;
@@ -218,25 +333,52 @@ export default function App() {
     }
     const totalNet = totalGross / 1.033;
     const totalTax = totalGross - totalNet;
+    const finalProfit = totalNet - totalExpenses;
 
     const perSite = Object.values(perSiteMap)
-      .filter((p) => p.workDays > 0)
+      .filter((p) => p.workDays > 0 || p.expenses > 0)
       .sort((a, b) => b.gross - a.gross);
 
-    return { perSite, entries, totalDays, totalUnits, totalGross, totalNet, totalTax };
-  }, [workUnits, sites, siteById, cursor]);
+    return {
+      perSite,
+      entries,
+      totalDays,
+      totalUnits,
+      totalGross,
+      totalNet,
+      totalTax,
+      totalExpenses,
+      unsitedExpenses,
+      finalProfit,
+      expensesByType,
+      expEntries,
+      offEntries,
+      totalOffDays,
+      offByType,
+    };
+  }, [workUnits, sites, siteById, cursor, expenses, offDays]);
 
   const openDay = (d) => {
     const k = dateKey(d);
     setSelectedKey(k);
     const existing = workUnits[k];
+    const off = offDays[k];
+
+    // Default tab logic
     if (existing) {
+      setModalTab("work");
       setDraftSiteId(existing.siteId);
       setInputValue(String(existing.value));
+    } else if (off) {
+      setModalTab("off");
     } else {
+      setModalTab("work");
       setDraftSiteId(sites[0]?.id || null);
       setInputValue("");
     }
+
+    setDraftOffType(off?.type || "holiday");
+    setDraftOffMemo(off?.memo || "");
   };
 
   const saveDay = () => {
@@ -251,6 +393,14 @@ export default function App() {
       }
       return next;
     });
+    // If saving work, remove off-day
+    if (parseFloat(inputValue) > 0) {
+      setOffDays((prev) => {
+        const next = { ...prev };
+        delete next[selectedKey];
+        return next;
+      });
+    }
     setSelectedKey(null);
   };
 
@@ -262,6 +412,64 @@ export default function App() {
       return next;
     });
     setSelectedKey(null);
+  };
+
+  const saveOffDay = () => {
+    if (!selectedKey) return;
+    setOffDays((prev) => {
+      const next = { ...prev };
+      if (!draftOffType) {
+        delete next[selectedKey];
+      } else {
+        next[selectedKey] = { type: draftOffType, memo: draftOffMemo.trim() };
+      }
+      return next;
+    });
+    // If saving off-day, remove work entry
+    setWorkUnits((prev) => {
+      const next = { ...prev };
+      delete next[selectedKey];
+      return next;
+    });
+    setSelectedKey(null);
+  };
+
+  const deleteOffDay = () => {
+    if (!selectedKey) return;
+    setOffDays((prev) => {
+      const next = { ...prev };
+      delete next[selectedKey];
+      return next;
+    });
+    setSelectedKey(null);
+  };
+
+  const addExpense = (dateKeyStr, expenseData) => {
+    setExpenses((prev) => {
+      const next = { ...prev };
+      const list = next[dateKeyStr] ? [...next[dateKeyStr]] : [];
+      if (expenseData.id) {
+        // edit
+        const idx = list.findIndex((e) => e.id === expenseData.id);
+        if (idx >= 0) list[idx] = expenseData;
+        else list.push(expenseData);
+      } else {
+        list.push({ ...expenseData, id: genId("e") });
+      }
+      next[dateKeyStr] = list;
+      return next;
+    });
+  };
+
+  const deleteExpense = (dateKeyStr, expenseId) => {
+    setExpenses((prev) => {
+      const next = { ...prev };
+      if (!next[dateKeyStr]) return next;
+      const filtered = next[dateKeyStr].filter((e) => e.id !== expenseId);
+      if (filtered.length === 0) delete next[dateKeyStr];
+      else next[dateKeyStr] = filtered;
+      return next;
+    });
   };
 
   const prevMonth = () => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1));
@@ -284,6 +492,17 @@ export default function App() {
       }
       return next;
     });
+    // Also remove site from expenses
+    setExpenses((prev) => {
+      const next = {};
+      for (const [k, list] of Object.entries(prev)) {
+        const filtered = list.map((e) =>
+          e.siteId === siteId ? { ...e, siteId: null } : e
+        );
+        next[k] = filtered;
+      }
+      return next;
+    });
     setSites((prev) => prev.filter((s) => s.id !== siteId));
   };
 
@@ -292,6 +511,8 @@ export default function App() {
 
   const selectedDate = selectedKey ? parseKey(selectedKey) : null;
   const selectedEntry = selectedKey ? workUnits[selectedKey] : null;
+  const selectedOff = selectedKey ? offDays[selectedKey] : null;
+  const selectedExpenses = selectedKey ? expenses[selectedKey] || [] : [];
   const draftSite = draftSiteId ? siteById[draftSiteId] : null;
   const previewValue = parseFloat(inputValue);
   const previewGross =
@@ -343,7 +564,7 @@ export default function App() {
                 오늘도 우쭈쭈
               </h1>
               <p className="mt-1.5 text-xs md:text-sm" style={{ color: C.muted }}>
-                수고한 나에게 — 현장별 공수 기록
+                공수 · 휴무 · 경비를 한 곳에
               </p>
             </div>
           </div>
@@ -369,6 +590,7 @@ export default function App() {
         </header>
 
         <div className="grid lg:grid-cols-5 gap-4 md:gap-5">
+          {/* Calendar */}
           <div className="lg:col-span-3">
             <div
               className="rounded-2xl p-3 md:p-5"
@@ -445,34 +667,43 @@ export default function App() {
                   const k = dateKey(d);
                   const entry = workUnits[k];
                   const site = entry ? siteById[entry.siteId] : null;
+                  const off = offDays[k];
+                  const offType = off ? offTypeById[off.type] : null;
+                  const dayExpenses = expenses[k] || [];
+                  const expenseTotal = dayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
                   const isToday = isSameDay(d, today);
                   const dow = d.getDay();
-                  const hasValue = entry && entry.value > 0 && site;
+                  const hasWork = entry && entry.value > 0 && site;
+                  const hasOff = !!off && !hasWork;
+                  const hasExp = expenseTotal > 0;
 
-                  const cellBg = hasValue ? tint(site.color, 0.12) : C.surface;
-                  const cellBorder = isToday
-                    ? `2px solid ${C.accent}`
-                    : hasValue
-                    ? `1px solid ${tint(site.color, 0.3)}`
-                    : `1px solid ${C.borderSoft}`;
+                  let cellBg = C.surface;
+                  let cellBorder = `1px solid ${C.borderSoft}`;
+                  if (hasWork) {
+                    cellBg = tint(site.color, 0.12);
+                    cellBorder = `1px solid ${tint(site.color, 0.3)}`;
+                  } else if (hasOff && offType) {
+                    cellBg = tint(offType.color, 0.1);
+                    cellBorder = `1px solid ${tint(offType.color, 0.3)}`;
+                  }
+                  if (isToday) cellBorder = `2px solid ${C.accent}`;
 
                   return (
                     <button
                       key={i}
                       onClick={() => openDay(d)}
                       className="aspect-square rounded-lg flex flex-col p-1 md:p-1.5 relative overflow-hidden"
-                      style={{
-                        background: cellBg,
-                        border: cellBorder,
-                        color: C.ink,
-                      }}
+                      style={{ background: cellBg, border: cellBorder, color: C.ink }}
                     >
                       <div className="flex items-start justify-between w-full gap-1">
                         <span
                           className="text-[11px] md:text-xs leading-none font-medium num"
                           style={{
-                            color: hasValue
+                            color: hasWork
                               ? site.color
+                              : hasOff && offType
+                              ? offType.color
                               : dow === 0
                               ? C.sun
                               : dow === 6
@@ -482,7 +713,7 @@ export default function App() {
                         >
                           {d.getDate()}
                         </span>
-                        {hasValue && (
+                        {hasWork && (
                           <span
                             className="text-[8px] md:text-[9px] rounded leading-tight"
                             style={{
@@ -499,9 +730,22 @@ export default function App() {
                             {site.abbr}
                           </span>
                         )}
+                        {hasOff && offType && (
+                          <span
+                            className="text-[8px] md:text-[9px] rounded leading-tight"
+                            style={{
+                              background: offType.color,
+                              color: "#fff",
+                              fontWeight: 600,
+                              padding: "1px 4px",
+                            }}
+                          >
+                            {offType.short}
+                          </span>
+                        )}
                       </div>
 
-                      {hasValue && (
+                      {hasWork && (
                         <div className="flex-1 flex items-center justify-center">
                           <span
                             className="leading-none num"
@@ -517,7 +761,22 @@ export default function App() {
                         </div>
                       )}
 
-                      {isToday && !hasValue && (
+                      {hasOff && !hasWork && offType && (
+                        <div className="flex-1 flex items-center justify-center">
+                          <span
+                            className="text-[10px] md:text-xs"
+                            style={{
+                              fontFamily: FONT_DISPLAY,
+                              fontWeight: 600,
+                              color: offType.color,
+                            }}
+                          >
+                            {offType.label}
+                          </span>
+                        </div>
+                      )}
+
+                      {isToday && !hasWork && !hasOff && (
                         <div className="flex-1 flex items-center justify-center">
                           <span
                             className="text-[9px] uppercase tracking-widest"
@@ -527,17 +786,30 @@ export default function App() {
                           </span>
                         </div>
                       )}
+
+                      {/* Expense indicator dot at bottom */}
+                      {hasExp && (
+                        <div
+                          className="absolute bottom-0.5 right-0.5 rounded-full"
+                          style={{
+                            width: 6,
+                            height: 6,
+                            background: C.orange,
+                          }}
+                          title={`경비 ${won(expenseTotal)}원`}
+                        />
+                      )}
                     </button>
                   );
                 })}
               </div>
 
-              {summary.perSite.length > 0 && (
-                <div
-                  className="mt-4 pt-3 flex items-center gap-3 flex-wrap text-xs"
-                  style={{ borderTop: `1px dashed ${C.border}`, color: C.muted }}
-                >
-                  {summary.perSite.map((p) => (
+              <div
+                className="mt-4 pt-3 flex items-center gap-3 flex-wrap text-xs"
+                style={{ borderTop: `1px dashed ${C.border}`, color: C.muted }}
+              >
+                {summary.perSite.length > 0 &&
+                  summary.perSite.map((p) => (
                     <div key={p.site.id} className="flex items-center gap-1.5">
                       <span
                         className="inline-block rounded-full"
@@ -546,12 +818,20 @@ export default function App() {
                       <span style={{ color: C.inkSoft }}>{p.site.name}</span>
                     </div>
                   ))}
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="inline-block rounded-full"
+                    style={{ width: 6, height: 6, background: C.orange }}
+                  />
+                  <span>경비</span>
                 </div>
-              )}
+              </div>
             </div>
           </div>
 
+          {/* Summary */}
           <aside className="lg:col-span-2 space-y-4">
+            {/* Grand total */}
             <div
               className="rounded-2xl p-5 md:p-6"
               style={{ background: C.card, border: `1px solid ${C.border}` }}
@@ -577,11 +857,28 @@ export default function App() {
                   displayFont
                   big
                 />
+                {summary.totalOffDays > 0 && (
+                  <StatRow label="휴무 일수" value={summary.totalOffDays} unit="일" />
+                )}
               </div>
 
               <div className="space-y-2.5 mb-4">
                 <AmountRow label="총 지급액" value={summary.totalGross} color={C.inkSoft} />
                 <AmountRow label="세금 (3.3%)" value={summary.totalTax} color={C.muted} minus />
+                <AmountRow
+                  label="실수령액"
+                  value={summary.totalNet}
+                  color={C.green}
+                  bold
+                />
+                {summary.totalExpenses > 0 && (
+                  <AmountRow
+                    label="경비 지출"
+                    value={summary.totalExpenses}
+                    color={C.orange}
+                    minus
+                  />
+                )}
               </div>
 
               <div className="rounded-xl p-4" style={{ background: C.greenSoft }}>
@@ -589,7 +886,7 @@ export default function App() {
                   className="text-xs mb-1"
                   style={{ color: C.green, fontWeight: 600, letterSpacing: "0.02em" }}
                 >
-                  이번 달 실수령액
+                  {summary.totalExpenses > 0 ? "순수익 (경비 차감)" : "이번 달 실수령액"}
                 </div>
                 <div
                   className="leading-none num"
@@ -600,7 +897,7 @@ export default function App() {
                     fontSize: "clamp(24px, 5vw, 32px)",
                   }}
                 >
-                  {won(summary.totalNet)}
+                  {won(summary.finalProfit)}
                   <span className="text-base ml-1" style={{ fontWeight: 500 }}>
                     원
                   </span>
@@ -608,6 +905,7 @@ export default function App() {
               </div>
             </div>
 
+            {/* Per-site breakdown */}
             {summary.perSite.length > 0 && (
               <div
                 className="rounded-2xl p-5 md:p-6"
@@ -647,7 +945,7 @@ export default function App() {
                         </span>
                       </div>
 
-                      <div className="flex items-baseline justify-between mb-1.5">
+                      <div className="flex items-baseline justify-between mb-1">
                         <span className="text-xs num" style={{ color: C.muted }}>
                           {p.workDays}일 · {fmtUnits(p.totalUnits)}공수
                         </span>
@@ -656,12 +954,23 @@ export default function App() {
                         </span>
                       </div>
 
+                      {p.expenses > 0 && (
+                        <div className="flex items-baseline justify-between mb-1">
+                          <span className="text-xs" style={{ color: C.orange }}>
+                            경비
+                          </span>
+                          <span className="text-xs num" style={{ color: C.orange }}>
+                            −{won(p.expenses)}원
+                          </span>
+                        </div>
+                      )}
+
                       <div
                         className="flex items-baseline justify-between pt-1.5"
                         style={{ borderTop: `1px dashed ${tint(p.site.color, 0.25)}` }}
                       >
                         <span className="text-xs" style={{ color: C.green, fontWeight: 600 }}>
-                          실수령
+                          {p.expenses > 0 ? "순수익" : "실수령"}
                         </span>
                         <span
                           className="num"
@@ -672,16 +981,125 @@ export default function App() {
                             fontSize: "1.05rem",
                           }}
                         >
-                          {won(p.net)}원
+                          {won(p.net - p.expenses)}원
                         </span>
                       </div>
                     </div>
                   ))}
+
+                  {summary.unsitedExpenses > 0 && (
+                    <div
+                      className="rounded-xl p-3"
+                      style={{
+                        background: tint(C.orange, 0.08),
+                        border: `1px dashed ${tint(C.orange, 0.3)}`,
+                      }}
+                    >
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-sm font-semibold" style={{ color: C.inkSoft }}>
+                          공통 / 미지정 경비
+                        </span>
+                        <span
+                          className="num"
+                          style={{ color: C.orange, fontWeight: 600 }}
+                        >
+                          {won(summary.unsitedExpenses)}원
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {summary.entries.length > 0 && (
+            {/* Expense breakdown */}
+            {summary.totalExpenses > 0 && (
+              <div
+                className="rounded-2xl p-5 md:p-6"
+                style={{ background: C.card, border: `1px solid ${C.border}` }}
+              >
+                <div className="flex items-baseline justify-between mb-3">
+                  <h3 className="text-base" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}>
+                    경비 분류
+                  </h3>
+                  <span className="text-xs num" style={{ color: C.orange, fontWeight: 600 }}>
+                    총 {won(summary.totalExpenses)}원
+                  </span>
+                </div>
+                <div className="space-y-1.5">
+                  {EXPENSE_TYPES.map((t) => {
+                    const amount = summary.expensesByType[t.id] || 0;
+                    if (amount === 0) return null;
+                    const pct = (amount / summary.totalExpenses) * 100;
+                    return (
+                      <div key={t.id} className="space-y-1">
+                        <div className="flex items-baseline justify-between text-sm">
+                          <span style={{ color: C.inkSoft }}>
+                            {t.icon} {t.label}
+                          </span>
+                          <span className="num" style={{ color: C.inkSoft }}>
+                            {won(amount)}원
+                          </span>
+                        </div>
+                        <div
+                          className="h-1.5 rounded-full overflow-hidden"
+                          style={{ background: C.surface }}
+                        >
+                          <div
+                            className="h-full"
+                            style={{
+                              width: `${pct}%`,
+                              background: C.orange,
+                              borderRadius: "inherit",
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Off-day breakdown */}
+            {summary.totalOffDays > 0 && (
+              <div
+                className="rounded-2xl p-5 md:p-6"
+                style={{ background: C.card, border: `1px solid ${C.border}` }}
+              >
+                <div className="flex items-baseline justify-between mb-3">
+                  <h3 className="text-base" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}>
+                    휴무 내역
+                  </h3>
+                  <span className="text-xs num" style={{ color: C.muted }}>
+                    총 {summary.totalOffDays}일
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {OFFDAY_TYPES.map((t) => {
+                    const cnt = summary.offByType[t.id] || 0;
+                    if (cnt === 0) return null;
+                    return (
+                      <div
+                        key={t.id}
+                        className="px-2.5 py-1 rounded-full text-xs flex items-center gap-1.5"
+                        style={{
+                          background: tint(t.color, 0.1),
+                          border: `1px solid ${tint(t.color, 0.25)}`,
+                          color: t.color,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {t.label} <span className="num">{cnt}일</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Daily log */}
+            {(summary.entries.length > 0 || summary.expEntries.length > 0 || summary.offEntries.length > 0) && (
               <div
                 className="rounded-2xl p-5 md:p-6"
                 style={{ background: C.card, border: `1px solid ${C.border}` }}
@@ -694,47 +1112,117 @@ export default function App() {
                 </h3>
                 <div
                   className="space-y-0.5 hide-scrollbar"
-                  style={{ maxHeight: 240, overflowY: "auto" }}
+                  style={{ maxHeight: 280, overflowY: "auto" }}
                 >
-                  {summary.entries.map((e) => (
-                    <button
-                      key={e.key}
-                      onClick={() => openDay(e.date)}
-                      className="w-full flex items-center justify-between text-sm py-1.5 px-2 rounded gap-2"
-                      style={{ background: "transparent" }}
-                    >
-                      <span className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="inline-block rounded-full shrink-0"
-                          style={{ width: 8, height: 8, background: e.site.color }}
-                        />
-                        <span className="num shrink-0" style={{ color: C.inkSoft }}>
-                          {e.date.getMonth() + 1}/{e.date.getDate()}
-                        </span>
-                        <span className="text-xs truncate" style={{ color: C.muted }}>
-                          {e.site.abbr}
-                        </span>
-                      </span>
-                      <span className="flex items-baseline gap-2 shrink-0">
-                        <span
-                          className="num font-semibold"
-                          style={{
-                            color: e.site.color,
-                            fontFamily: FONT_DISPLAY,
-                            fontSize: "1.05em",
-                          }}
+                  {[
+                    ...summary.entries.map((e) => ({ ...e, kind: "work" })),
+                    ...summary.offEntries.map((e) => ({ ...e, kind: "off" })),
+                    ...summary.expEntries.map((e) => ({ ...e, kind: "exp" })),
+                  ]
+                    .sort((a, b) => a.date - b.date)
+                    .map((e, idx) => {
+                      if (e.kind === "work") {
+                        return (
+                          <button
+                            key={`w-${e.key}-${idx}`}
+                            onClick={() => openDay(e.date)}
+                            className="w-full flex items-center justify-between text-sm py-1.5 px-2 rounded gap-2"
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="inline-block rounded-full shrink-0"
+                                style={{ width: 8, height: 8, background: e.site.color }}
+                              />
+                              <span className="num shrink-0" style={{ color: C.inkSoft }}>
+                                {e.date.getMonth() + 1}/{e.date.getDate()}
+                              </span>
+                              <span className="text-xs truncate" style={{ color: C.muted }}>
+                                {e.site.abbr}
+                              </span>
+                            </span>
+                            <span className="flex items-baseline gap-2 shrink-0">
+                              <span
+                                className="num font-semibold"
+                                style={{
+                                  color: e.site.color,
+                                  fontFamily: FONT_DISPLAY,
+                                  fontSize: "1.05em",
+                                }}
+                              >
+                                {fmtUnits(e.value)}
+                              </span>
+                              <span
+                                className="text-xs num"
+                                style={{ color: C.muted, minWidth: 68, textAlign: "right" }}
+                              >
+                                {won(e.value * e.site.rate)}원
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      }
+                      if (e.kind === "off") {
+                        const offType = offTypeById[e.type];
+                        return (
+                          <button
+                            key={`o-${e.key}-${idx}`}
+                            onClick={() => openDay(e.date)}
+                            className="w-full flex items-center justify-between text-sm py-1.5 px-2 rounded gap-2"
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="inline-block rounded-full shrink-0"
+                                style={{ width: 8, height: 8, background: offType?.color }}
+                              />
+                              <span className="num shrink-0" style={{ color: C.inkSoft }}>
+                                {e.date.getMonth() + 1}/{e.date.getDate()}
+                              </span>
+                              <span
+                                className="text-xs truncate"
+                                style={{ color: offType?.color, fontWeight: 600 }}
+                              >
+                                {offType?.label}
+                              </span>
+                              {e.memo && (
+                                <span
+                                  className="text-xs truncate"
+                                  style={{ color: C.muted }}
+                                >
+                                  · {e.memo}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      }
+                      // expense
+                      const expType = expTypeById[e.type];
+                      const site = e.siteId ? siteById[e.siteId] : null;
+                      return (
+                        <button
+                          key={`e-${e.id}-${idx}`}
+                          onClick={() => openDay(e.date)}
+                          className="w-full flex items-center justify-between text-sm py-1.5 px-2 rounded gap-2"
                         >
-                          {fmtUnits(e.value)}
-                        </span>
-                        <span
-                          className="text-xs num"
-                          style={{ color: C.muted, minWidth: 68, textAlign: "right" }}
-                        >
-                          {won(e.value * e.site.rate)}원
-                        </span>
-                      </span>
-                    </button>
-                  ))}
+                          <span className="flex items-center gap-2 min-w-0">
+                            <span style={{ fontSize: "0.9em" }}>{expType?.icon}</span>
+                            <span className="num shrink-0" style={{ color: C.inkSoft }}>
+                              {e.date.getMonth() + 1}/{e.date.getDate()}
+                            </span>
+                            <span className="text-xs truncate" style={{ color: C.muted }}>
+                              {expType?.label}
+                              {site && ` · ${site.abbr}`}
+                            </span>
+                          </span>
+                          <span
+                            className="text-xs num shrink-0"
+                            style={{ color: C.orange, fontWeight: 600 }}
+                          >
+                            −{won(e.amount)}원
+                          </span>
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
             )}
@@ -761,13 +1249,14 @@ export default function App() {
         </div>
 
         <footer className="mt-6 text-center text-xs" style={{ color: C.muted }}>
-          실수령 = 공수 × 단가 ÷ 1.033 · 자동 저장
+          실수령 = 공수 × 단가 ÷ 1.033 · 순수익 = 실수령 − 경비 · 자동 저장
         </footer>
       </div>
 
+      {/* Day Modal with Tabs */}
       {selectedDate && (
         <Modal onClose={() => setSelectedKey(null)}>
-          <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <div className="text-xs num" style={{ color: C.muted }}>
                 {selectedDate.getFullYear()}년
@@ -803,107 +1292,238 @@ export default function App() {
             </button>
           </div>
 
-          {sites.length === 0 ? (
-            <div className="text-center py-6">
-              <Building2 size={32} style={{ color: C.muted, margin: "0 auto 10px" }} />
-              <p className="text-sm mb-4" style={{ color: C.inkSoft }}>
-                등록된 현장이 없어요.
-                <br />
-                먼저 현장을 추가해주세요.
-              </p>
-              <button
-                onClick={() => {
-                  setSelectedKey(null);
-                  setEditingSite("new");
-                }}
-                className="px-4 py-2.5 rounded-lg text-sm font-semibold"
-                style={{ background: C.accent, color: "#fff" }}
-              >
-                현장 추가하기
-              </button>
-            </div>
-          ) : (
+          {/* Tab buttons */}
+          <div className="flex gap-1 mb-4 p-1 rounded-lg" style={{ background: C.surface }}>
+            <TabButton
+              active={modalTab === "work"}
+              onClick={() => setModalTab("work")}
+              icon={<Briefcase size={14} />}
+              label="공수"
+              badge={selectedEntry ? "●" : null}
+            />
+            <TabButton
+              active={modalTab === "off"}
+              onClick={() => setModalTab("off")}
+              icon={<Coffee size={14} />}
+              label="휴무"
+              badge={selectedOff ? "●" : null}
+            />
+            <TabButton
+              active={modalTab === "expense"}
+              onClick={() => setModalTab("expense")}
+              icon={<Wallet size={14} />}
+              label="경비"
+              badge={selectedExpenses.length > 0 ? String(selectedExpenses.length) : null}
+            />
+          </div>
+
+          {/* Work tab */}
+          {modalTab === "work" && (
             <>
-              <div className="mb-4">
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-xs font-medium" style={{ color: C.muted }}>
-                    현장 선택
-                  </label>
+              {sites.length === 0 ? (
+                <div className="text-center py-6">
+                  <Building2 size={32} style={{ color: C.muted, margin: "0 auto 10px" }} />
+                  <p className="text-sm mb-4" style={{ color: C.inkSoft }}>
+                    등록된 현장이 없어요.
+                  </p>
                   <button
                     onClick={() => {
                       setSelectedKey(null);
-                      setShowSitesList(true);
+                      setEditingSite("new");
                     }}
-                    className="text-xs"
-                    style={{
-                      color: C.accent,
-                      textDecoration: "underline",
-                      textUnderlineOffset: 2,
-                    }}
+                    className="px-4 py-2.5 rounded-lg text-sm font-semibold"
+                    style={{ background: C.accent, color: "#fff" }}
                   >
-                    현장 관리
+                    현장 추가하기
                   </button>
                 </div>
-                <div
-                  className="flex gap-1.5 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1"
-                  style={{ scrollSnapType: "x mandatory" }}
-                >
-                  {sites.map((s) => {
-                    const active = draftSiteId === s.id;
-                    return (
+              ) : (
+                <>
+                  <div className="mb-4">
+                    <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
+                      현장 선택
+                    </label>
+                    <div
+                      className="flex gap-1.5 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1"
+                      style={{ scrollSnapType: "x mandatory" }}
+                    >
+                      {sites.map((s) => {
+                        const active = draftSiteId === s.id;
+                        return (
+                          <button
+                            key={s.id}
+                            onClick={() => setDraftSiteId(s.id)}
+                            className="rounded-lg px-3 py-2 shrink-0 text-left"
+                            style={{
+                              background: active ? tint(s.color, 0.15) : C.surface,
+                              border: `1.5px solid ${active ? s.color : C.border}`,
+                              minWidth: 110,
+                              scrollSnapAlign: "start",
+                            }}
+                          >
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span
+                                className="inline-block rounded-full shrink-0"
+                                style={{ width: 8, height: 8, background: s.color }}
+                              />
+                              <span
+                                className="text-sm font-semibold truncate"
+                                style={{ color: active ? s.color : C.ink }}
+                              >
+                                {s.name}
+                              </span>
+                            </div>
+                            <div className="text-[11px] num" style={{ color: C.muted }}>
+                              {won(s.rate)}원
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
+                      공수 빠른 선택
+                    </label>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {QUICK_VALUES.map((v) => {
+                        const active = parseFloat(inputValue) === v;
+                        return (
+                          <button
+                            key={v}
+                            onClick={() => setInputValue(String(v))}
+                            className="py-2.5 rounded-lg text-sm num"
+                            style={{
+                              background: active ? C.accent : C.surface,
+                              color: active ? "#fff" : C.ink,
+                              border: `1px solid ${active ? C.accent : C.border}`,
+                              fontFamily: FONT_DISPLAY,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {v}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
+                      직접 입력
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.25"
+                      min="0"
+                      value={inputValue}
+                      onChange={(e) => setInputValue(e.target.value)}
+                      placeholder="예: 1.5"
+                      className="w-full px-3 py-3 rounded-lg text-lg num"
+                      style={{
+                        background: C.surface,
+                        border: `1px solid ${C.border}`,
+                        color: C.ink,
+                        fontFamily: FONT_DISPLAY,
+                        fontWeight: 600,
+                      }}
+                    />
+                  </div>
+
+                  {Number.isFinite(previewValue) && previewValue > 0 && draftSite && (
+                    <div
+                      className="mb-4 p-3 rounded-lg space-y-1.5"
+                      style={{
+                        background: tint(draftSite.color, 0.08),
+                        border: `1px dashed ${tint(draftSite.color, 0.3)}`,
+                      }}
+                    >
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: C.muted }}>
+                          {draftSite.name} × {fmtUnits(previewValue)}공수
+                        </span>
+                        <span className="num" style={{ color: C.inkSoft }}>
+                          {won(previewGross)}원
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: C.muted }}>세금 (3.3%)</span>
+                        <span className="num" style={{ color: C.muted }}>
+                          −{won(previewGross - previewNet)}원
+                        </span>
+                      </div>
+                      <div
+                        className="flex justify-between text-sm pt-1.5"
+                        style={{ borderTop: `1px dashed ${tint(draftSite.color, 0.3)}` }}
+                      >
+                        <span style={{ color: C.green, fontWeight: 600 }}>실수령</span>
+                        <span
+                          className="num font-semibold"
+                          style={{ color: C.green, fontFamily: FONT_DISPLAY }}
+                        >
+                          {won(previewNet)}원
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    {selectedEntry && (
                       <button
-                        key={s.id}
-                        onClick={() => setDraftSiteId(s.id)}
-                        className="rounded-lg px-3 py-2 shrink-0 text-left"
+                        onClick={deleteDay}
+                        className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-lg text-sm"
                         style={{
-                          background: active ? tint(s.color, 0.15) : C.surface,
-                          border: `1.5px solid ${active ? s.color : C.border}`,
-                          minWidth: 110,
-                          scrollSnapAlign: "start",
+                          background: C.surface,
+                          color: C.muted,
+                          border: `1px solid ${C.border}`,
                         }}
                       >
-                        <div className="flex items-center gap-1.5 mb-0.5">
-                          <span
-                            className="inline-block rounded-full shrink-0"
-                            style={{ width: 8, height: 8, background: s.color }}
-                          />
-                          <span
-                            className="text-sm font-semibold truncate"
-                            style={{ color: active ? s.color : C.ink }}
-                          >
-                            {s.name}
-                          </span>
-                        </div>
-                        <div className="text-[11px] num" style={{ color: C.muted }}>
-                          {won(s.rate)}원
-                        </div>
+                        <Trash2 size={16} /> 삭제
                       </button>
-                    );
-                  })}
-                </div>
-              </div>
+                    )}
+                    <button
+                      onClick={saveDay}
+                      disabled={!draftSiteId}
+                      className="flex-1 py-3 rounded-lg text-sm font-semibold"
+                      style={{
+                        background: draftSiteId ? C.accent : C.border,
+                        color: "#fff",
+                        opacity: draftSiteId ? 1 : 0.6,
+                      }}
+                    >
+                      저장
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
 
+          {/* Off-day tab */}
+          {modalTab === "off" && (
+            <>
               <div className="mb-4">
                 <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
-                  공수 빠른 선택
+                  휴무 사유
                 </label>
                 <div className="grid grid-cols-5 gap-1.5">
-                  {QUICK_VALUES.map((v) => {
-                    const active = parseFloat(inputValue) === v;
+                  {OFFDAY_TYPES.map((t) => {
+                    const active = draftOffType === t.id;
                     return (
                       <button
-                        key={v}
-                        onClick={() => setInputValue(String(v))}
-                        className="py-2.5 rounded-lg text-sm num"
+                        key={t.id}
+                        onClick={() => setDraftOffType(t.id)}
+                        className="py-2.5 rounded-lg text-xs"
                         style={{
-                          background: active ? C.accent : C.surface,
+                          background: active ? t.color : C.surface,
                           color: active ? "#fff" : C.ink,
-                          border: `1px solid ${active ? C.accent : C.border}`,
-                          fontFamily: FONT_DISPLAY,
+                          border: `1px solid ${active ? t.color : C.border}`,
                           fontWeight: 600,
                         }}
                       >
-                        {v}
+                        {t.label}
                       </button>
                     );
                   })}
@@ -912,68 +1532,41 @@ export default function App() {
 
               <div className="mb-4">
                 <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
-                  직접 입력
+                  메모 (선택)
                 </label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.25"
-                  min="0"
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="예: 1.5"
-                  className="w-full px-3 py-3 rounded-lg text-lg num"
+                <textarea
+                  value={draftOffMemo}
+                  onChange={(e) => setDraftOffMemo(e.target.value)}
+                  placeholder="예: 정기 건강검진"
+                  rows={3}
+                  maxLength={100}
+                  className="w-full px-3 py-3 rounded-lg text-sm resize-none"
                   style={{
                     background: C.surface,
                     border: `1px solid ${C.border}`,
                     color: C.ink,
-                    fontFamily: FONT_DISPLAY,
-                    fontWeight: 600,
                   }}
                 />
               </div>
 
-              {Number.isFinite(previewValue) && previewValue > 0 && draftSite && (
+              {selectedEntry && (
                 <div
-                  className="mb-4 p-3 rounded-lg space-y-1.5"
+                  className="mb-4 p-3 rounded-lg text-xs"
                   style={{
-                    background: tint(draftSite.color, 0.08),
-                    border: `1px dashed ${tint(draftSite.color, 0.3)}`,
+                    background: tint(C.accent, 0.08),
+                    border: `1px dashed ${tint(C.accent, 0.3)}`,
+                    color: C.accentDark,
                   }}
                 >
-                  <div className="flex justify-between text-xs">
-                    <span style={{ color: C.muted }}>
-                      {draftSite.name} × {fmtUnits(previewValue)}공수
-                    </span>
-                    <span className="num" style={{ color: C.inkSoft }}>
-                      {won(previewGross)}원
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-xs">
-                    <span style={{ color: C.muted }}>세금 (3.3%)</span>
-                    <span className="num" style={{ color: C.muted }}>
-                      −{won(previewGross - previewNet)}원
-                    </span>
-                  </div>
-                  <div
-                    className="flex justify-between text-sm pt-1.5"
-                    style={{ borderTop: `1px dashed ${tint(draftSite.color, 0.3)}` }}
-                  >
-                    <span style={{ color: C.green, fontWeight: 600 }}>실수령</span>
-                    <span
-                      className="num font-semibold"
-                      style={{ color: C.green, fontFamily: FONT_DISPLAY }}
-                    >
-                      {won(previewNet)}원
-                    </span>
-                  </div>
+                  ⚠️ 이 날에 공수 기록({fmtUnits(selectedEntry.value)})이 있어요.
+                  휴무로 저장하면 공수 기록은 삭제됩니다.
                 </div>
               )}
 
               <div className="flex gap-2">
-                {selectedEntry && (
+                {selectedOff && (
                   <button
-                    onClick={deleteDay}
+                    onClick={deleteOffDay}
                     className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-lg text-sm"
                     style={{
                       background: C.surface,
@@ -985,23 +1578,153 @@ export default function App() {
                   </button>
                 )}
                 <button
-                  onClick={saveDay}
-                  disabled={!draftSiteId}
+                  onClick={saveOffDay}
                   className="flex-1 py-3 rounded-lg text-sm font-semibold"
-                  style={{
-                    background: draftSiteId ? C.accent : C.border,
-                    color: "#fff",
-                    opacity: draftSiteId ? 1 : 0.6,
-                  }}
+                  style={{ background: C.accent, color: "#fff" }}
                 >
                   저장
                 </button>
               </div>
             </>
           )}
+
+          {/* Expense tab */}
+          {modalTab === "expense" && (
+            <>
+              {selectedExpenses.length === 0 ? (
+                <div className="text-center py-6" style={{ color: C.muted }}>
+                  <Receipt size={32} style={{ margin: "0 auto 10px" }} />
+                  <p className="text-sm">이 날 등록된 경비가 없어요</p>
+                </div>
+              ) : (
+                <div className="space-y-2 mb-4">
+                  {selectedExpenses.map((exp) => {
+                    const expType = expTypeById[exp.type];
+                    const site = exp.siteId ? siteById[exp.siteId] : null;
+                    return (
+                      <div
+                        key={exp.id}
+                        className="rounded-xl p-3"
+                        style={{
+                          background: tint(C.orange, 0.08),
+                          border: `1px solid ${tint(C.orange, 0.2)}`,
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span style={{ fontSize: "1.2em" }}>{expType?.icon}</span>
+                            <div className="min-w-0">
+                              <div
+                                className="text-sm font-semibold truncate"
+                                style={{ color: C.ink }}
+                              >
+                                {expType?.label}
+                              </div>
+                              <div className="text-xs" style={{ color: C.muted }}>
+                                {site ? site.name : "공통/미지정"}
+                                {exp.memo && ` · ${exp.memo}`}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span
+                              className="num font-semibold"
+                              style={{ color: C.orange, fontFamily: FONT_DISPLAY }}
+                            >
+                              {won(exp.amount)}원
+                            </span>
+                            <button
+                              onClick={() =>
+                                setEditingExpense({ dateKey: selectedKey, expense: exp })
+                              }
+                              className="flex items-center justify-center rounded ml-1"
+                              style={{
+                                width: 28,
+                                height: 28,
+                                background: C.card,
+                                color: C.inkSoft,
+                                border: `1px solid ${C.border}`,
+                              }}
+                              aria-label="편집"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            <button
+                              onClick={() => deleteExpense(selectedKey, exp.id)}
+                              className="flex items-center justify-center rounded"
+                              style={{
+                                width: 28,
+                                height: 28,
+                                background: C.card,
+                                color: C.muted,
+                                border: `1px solid ${C.border}`,
+                              }}
+                              aria-label="삭제"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div
+                    className="flex items-baseline justify-between pt-2"
+                    style={{ borderTop: `1px dashed ${C.border}` }}
+                  >
+                    <span className="text-sm" style={{ color: C.muted }}>
+                      합계
+                    </span>
+                    <span
+                      className="num"
+                      style={{
+                        color: C.orange,
+                        fontFamily: FONT_DISPLAY,
+                        fontWeight: 700,
+                        fontSize: "1.1rem",
+                      }}
+                    >
+                      {won(selectedExpenses.reduce((s, e) => s + e.amount, 0))}원
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() =>
+                  setEditingExpense({
+                    dateKey: selectedKey,
+                    expense: { type: "transport", amount: 0, memo: "", siteId: null },
+                  })
+                }
+                className="w-full flex items-center justify-center gap-1.5 py-3 rounded-lg text-sm font-semibold"
+                style={{ background: C.orange, color: "#fff" }}
+              >
+                <Plus size={16} /> 경비 추가
+              </button>
+            </>
+          )}
         </Modal>
       )}
 
+      {/* Expense Edit Modal */}
+      {editingExpense && (
+        <ExpenseEditModal
+          dateKey={editingExpense.dateKey}
+          expense={editingExpense.expense}
+          sites={sites}
+          siteById={siteById}
+          workUnits={workUnits}
+          onClose={() => setEditingExpense(null)}
+          onSave={(data) => {
+            addExpense(editingExpense.dateKey, data);
+            setEditingExpense(null);
+          }}
+        />
+      )}
+
+      {/* Sites List Modal */}
       {showSitesList && !editingSite && (
         <Modal onClose={() => setShowSitesList(false)}>
           <div className="flex items-center justify-between mb-5">
@@ -1118,22 +1841,20 @@ export default function App() {
 
       {confirmDeleteSite && (
         <Modal onClose={() => setConfirmDeleteSite(null)}>
-          <h3
-            className="text-lg mb-2"
-            style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}
-          >
+          <h3 className="text-lg mb-2" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}>
             현장 삭제
           </h3>
           <p className="text-sm mb-4" style={{ color: C.inkSoft }}>
             <span className="font-semibold" style={{ color: confirmDeleteSite.color }}>
               {confirmDeleteSite.name}
-            </span>
-            {" "}을(를) 삭제할까요?
+            </span>{" "}
+            을(를) 삭제할까요?
             {entriesCountForSite(confirmDeleteSite.id) > 0 && (
               <>
                 <br />
                 <span style={{ color: C.accent }}>
-                  이 현장의 기록 {entriesCountForSite(confirmDeleteSite.id)}건도 함께 삭제됩니다.
+                  이 현장의 공수 기록 {entriesCountForSite(confirmDeleteSite.id)}건이 함께
+                  삭제됩니다. (경비는 미지정으로 변경)
                 </span>
               </>
             )}
@@ -1167,6 +1888,229 @@ export default function App() {
   );
 }
 
+// ==================== Tab Button ====================
+function TabButton({ active, onClick, icon, label, badge }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex-1 flex items-center justify-center gap-1 py-2 rounded-md text-sm relative"
+      style={{
+        background: active ? C.card : "transparent",
+        color: active ? C.ink : C.muted,
+        fontWeight: active ? 600 : 500,
+        boxShadow: active ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+      {badge && (
+        <span
+          style={{
+            fontSize: "0.7em",
+            color: C.accent,
+            fontWeight: 700,
+            marginLeft: 2,
+          }}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ==================== Expense Edit Modal ====================
+function ExpenseEditModal({ dateKey, expense, sites, siteById, workUnits, onClose, onSave }) {
+  const isNew = !expense.id;
+  const [type, setType] = useState(expense.type || "transport");
+  const [amount, setAmount] = useState(expense.amount ? String(expense.amount) : "");
+  const [memo, setMemo] = useState(expense.memo || "");
+
+  // Auto-link site: if work entry exists on this day, default to that site
+  const workEntry = workUnits[dateKey];
+  const [siteId, setSiteId] = useState(
+    expense.siteId !== undefined ? expense.siteId : workEntry ? workEntry.siteId : null
+  );
+
+  const canSave = Number(amount) > 0;
+
+  const handleSave = () => {
+    if (!canSave) return;
+    onSave({
+      id: expense.id,
+      type,
+      amount: Math.round(Number(amount)),
+      memo: memo.trim(),
+      siteId: siteId,
+    });
+  };
+
+  const d = parseKey(dateKey);
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="flex items-center gap-2 mb-5">
+        <button
+          onClick={onClose}
+          className="flex items-center justify-center rounded-lg"
+          style={{ width: 36, height: 36, background: C.surface, color: C.ink }}
+          aria-label="뒤로"
+        >
+          <ArrowLeft size={18} />
+        </button>
+        <h3 className="text-xl flex-1" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}>
+          {isNew ? "경비 추가" : "경비 편집"}
+        </h3>
+        <span className="text-xs num" style={{ color: C.muted }}>
+          {d.getMonth() + 1}/{d.getDate()}
+        </span>
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
+            분류
+          </label>
+          <div className="grid grid-cols-5 gap-1.5">
+            {EXPENSE_TYPES.map((t) => {
+              const active = type === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setType(t.id)}
+                  className="py-2.5 rounded-lg text-xs flex flex-col items-center gap-0.5"
+                  style={{
+                    background: active ? tint(C.orange, 0.15) : C.surface,
+                    color: active ? C.orange : C.ink,
+                    border: `1px solid ${active ? C.orange : C.border}`,
+                    fontWeight: active ? 600 : 500,
+                  }}
+                >
+                  <span style={{ fontSize: "1.2em" }}>{t.icon}</span>
+                  <span style={{ fontSize: "0.85em" }}>{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs mb-1.5 block font-medium" style={{ color: C.muted }}>
+            금액 (원)
+          </label>
+          <input
+            type="number"
+            inputMode="numeric"
+            step="1000"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="예: 8000"
+            autoFocus={isNew}
+            className="w-full px-3 py-3 rounded-lg text-lg num"
+            style={{
+              background: C.surface,
+              border: `1px solid ${C.border}`,
+              color: C.ink,
+              fontFamily: FONT_DISPLAY,
+              fontWeight: 600,
+            }}
+          />
+        </div>
+
+        <div>
+          <label className="text-xs mb-1.5 block font-medium" style={{ color: C.muted }}>
+            연결 현장 {workEntry && <span style={{ color: C.green }}>(근무일 자동 연결됨)</span>}
+          </label>
+          <div
+            className="flex gap-1.5 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1"
+            style={{ scrollSnapType: "x mandatory" }}
+          >
+            <button
+              onClick={() => setSiteId(null)}
+              className="rounded-lg px-3 py-2 shrink-0 text-left"
+              style={{
+                background: siteId === null ? tint(C.orange, 0.15) : C.surface,
+                border: `1.5px solid ${siteId === null ? C.orange : C.border}`,
+                minWidth: 100,
+                scrollSnapAlign: "start",
+              }}
+            >
+              <div className="text-sm font-semibold" style={{ color: siteId === null ? C.orange : C.ink }}>
+                공통/미지정
+              </div>
+              <div className="text-[11px]" style={{ color: C.muted }}>
+                개인비용 등
+              </div>
+            </button>
+            {sites.map((s) => {
+              const active = siteId === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => setSiteId(s.id)}
+                  className="rounded-lg px-3 py-2 shrink-0 text-left"
+                  style={{
+                    background: active ? tint(s.color, 0.15) : C.surface,
+                    border: `1.5px solid ${active ? s.color : C.border}`,
+                    minWidth: 110,
+                    scrollSnapAlign: "start",
+                  }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="inline-block rounded-full shrink-0"
+                      style={{ width: 8, height: 8, background: s.color }}
+                    />
+                    <span
+                      className="text-sm font-semibold truncate"
+                      style={{ color: active ? s.color : C.ink }}
+                    >
+                      {s.name}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs mb-1.5 block font-medium" style={{ color: C.muted }}>
+            메모 (선택)
+          </label>
+          <input
+            type="text"
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
+            placeholder="예: 점심 식사"
+            maxLength={50}
+            className="w-full px-3 py-3 rounded-lg text-sm"
+            style={{
+              background: C.surface,
+              border: `1px solid ${C.border}`,
+              color: C.ink,
+            }}
+          />
+        </div>
+      </div>
+
+      <button
+        onClick={handleSave}
+        disabled={!canSave}
+        className="w-full mt-5 py-3 rounded-lg text-sm font-semibold"
+        style={{
+          background: canSave ? C.orange : C.border,
+          color: "#fff",
+          opacity: canSave ? 1 : 0.6,
+        }}
+      >
+        {isNew ? "추가" : "저장"}
+      </button>
+    </Modal>
+  );
+}
+
+// ==================== Site Edit Modal (same as before) ====================
 function SiteEditModal({ site, onClose, onSave, existingColors }) {
   const isNew = !site;
   const [name, setName] = useState(site?.name || "");
@@ -1211,10 +2155,7 @@ function SiteEditModal({ site, onClose, onSave, existingColors }) {
             <ArrowLeft size={18} />
           </button>
         )}
-        <h3
-          className="text-xl flex-1"
-          style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}
-        >
+        <h3 className="text-xl flex-1" style={{ fontFamily: FONT_DISPLAY, fontWeight: 700 }}>
           {isNew ? "현장 추가" : "현장 편집"}
         </h3>
         {isNew && (
@@ -1342,42 +2283,6 @@ function SiteEditModal({ site, onClose, onSave, existingColors }) {
             })}
           </div>
         </div>
-
-        {name && abbr && Number(rate) > 0 && (
-          <div
-            className="p-3 rounded-lg flex items-center gap-3"
-            style={{
-              background: tint(color, 0.08),
-              border: `1px dashed ${tint(color, 0.3)}`,
-            }}
-          >
-            <div
-              className="flex items-center justify-center rounded-md shrink-0"
-              style={{
-                width: 40,
-                height: 40,
-                background: color,
-                color: "#fff",
-                fontFamily: FONT_DISPLAY,
-                fontWeight: 700,
-                fontSize: 13,
-              }}
-            >
-              {abbr}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs" style={{ color: C.muted }}>
-                미리보기
-              </div>
-              <div className="font-semibold truncate" style={{ color: C.ink }}>
-                {name}
-              </div>
-              <div className="text-xs num" style={{ color: C.muted }}>
-                1공수 {won(Number(rate))}원
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       <button
@@ -1423,13 +2328,16 @@ function StatRow({ label, value, unit, displayFont = false, big = false }) {
   );
 }
 
-function AmountRow({ label, value, color, minus = false }) {
+function AmountRow({ label, value, color, minus = false, bold = false }) {
   return (
     <div className="flex items-baseline justify-between">
       <span className="text-sm" style={{ color: C.muted }}>
         {label}
       </span>
-      <span className="num" style={{ color, fontWeight: 500, fontSize: "0.95rem" }}>
+      <span
+        className="num"
+        style={{ color, fontWeight: bold ? 700 : 500, fontSize: "0.95rem" }}
+      >
         {minus && value > 0 ? "−" : ""}
         {won(value)}원
       </span>
