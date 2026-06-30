@@ -646,10 +646,15 @@ export default function App() {
             >
               우쭈쭈
             </div>
-            <div>
+            <div className="min-w-0">
               <h1
-                className="text-2xl md:text-3xl tracking-tight leading-none"
-                style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: C.ink }}
+                className="tracking-tight leading-none whitespace-nowrap"
+                style={{
+                  fontFamily: FONT_DISPLAY,
+                  fontWeight: 700,
+                  color: C.ink,
+                  fontSize: "clamp(18px, 5.2vw, 30px)",
+                }}
               >
                 오늘도 우쭈쭈
               </h1>
