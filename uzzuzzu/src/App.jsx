@@ -13,6 +13,10 @@ import {
   Coffee,
   Wallet,
   Receipt,
+  Users,
+  ClipboardList,
+  Copy,
+  Check,
 } from "lucide-react";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
@@ -121,6 +125,14 @@ export default function App() {
   const [offDays, setOffDays] = useState({}); // { dateKey: {type, memo} }
   const [expenses, setExpenses] = useState({}); // { dateKey: [{id, type, amount, memo, siteId|null}] }
 
+  // ===== Team management (팀장 기능) =====
+  const [workers, setWorkers] = useState([]); // [{id, name, role, siteId, rate, active}]
+  const [teamWork, setTeamWork] = useState({}); // { dateKey: { workerId: value } }
+  const [dailyReports, setDailyReports] = useState({}); // { dateKey: { siteId, content, note } }
+  const [showTeamModal, setShowTeamModal] = useState(false);
+  const [editingWorker, setEditingWorker] = useState(null); // worker obj or {new:true}
+  const [confirmDeleteWorker, setConfirmDeleteWorker] = useState(null);
+
   // Tab in day modal: "work" | "off" | "expense"
   const [selectedKey, setSelectedKey] = useState(null);
   const [modalTab, setModalTab] = useState("work");
@@ -180,6 +192,22 @@ export default function App() {
       if (r?.value) loadedExp = JSON.parse(r.value);
     } catch {}
 
+    let loadedWorkers = null;
+    let loadedTeamWork = null;
+    let loadedReports = null;
+    try {
+      const r = storage.get("uzzuzzu:workers");
+      if (r?.value) loadedWorkers = JSON.parse(r.value);
+    } catch {}
+    try {
+      const r = storage.get("uzzuzzu:teamWork");
+      if (r?.value) loadedTeamWork = JSON.parse(r.value);
+    } catch {}
+    try {
+      const r = storage.get("uzzuzzu:dailyReports");
+      if (r?.value) loadedReports = JSON.parse(r.value);
+    } catch {}
+
     if (!loadedSites) {
       const defaultSite = {
         id: genId(),
@@ -195,6 +223,9 @@ export default function App() {
     setWorkUnits(loadedWU || {});
     setOffDays(loadedOff || {});
     setExpenses(loadedExp || {});
+    setWorkers(loadedWorkers || []);
+    setTeamWork(loadedTeamWork || {});
+    setDailyReports(loadedReports || {});
     setLoaded(true);
   }, []);
 
@@ -214,6 +245,18 @@ export default function App() {
     if (!loaded) return;
     storage.set("uzzuzzu:expenses", JSON.stringify(expenses));
   }, [expenses, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    storage.set("uzzuzzu:workers", JSON.stringify(workers));
+  }, [workers, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    storage.set("uzzuzzu:teamWork", JSON.stringify(teamWork));
+  }, [teamWork, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    storage.set("uzzuzzu:dailyReports", JSON.stringify(dailyReports));
+  }, [dailyReports, loaded]);
 
   const siteById = useMemo(() => {
     const m = {};
@@ -509,6 +552,53 @@ export default function App() {
   const entriesCountForSite = (siteId) =>
     Object.values(workUnits).filter((e) => e.siteId === siteId).length;
 
+  // ===== Team management functions =====
+  const upsertWorker = (worker) => {
+    setWorkers((prev) => {
+      const exists = prev.find((w) => w.id === worker.id);
+      if (exists) return prev.map((w) => (w.id === worker.id ? worker : w));
+      return [...prev, worker];
+    });
+  };
+
+  const deleteWorkerCascade = (workerId) => {
+    setTeamWork((prev) => {
+      const next = {};
+      for (const [k, m] of Object.entries(prev)) {
+        if (!m[workerId]) {
+          next[k] = m;
+          continue;
+        }
+        const { [workerId]: _omit, ...rest } = m;
+        next[k] = rest;
+      }
+      return next;
+    });
+    setWorkers((prev) => prev.filter((w) => w.id !== workerId));
+  };
+
+  const setTeamWorkValue = (dateKeyStr, workerId, value) => {
+    setTeamWork((prev) => {
+      const next = { ...prev };
+      const dayMap = { ...(next[dateKeyStr] || {}) };
+      if (value === null || value === 0) {
+        delete dayMap[workerId];
+      } else {
+        dayMap[workerId] = value;
+      }
+      if (Object.keys(dayMap).length === 0) {
+        delete next[dateKeyStr];
+      } else {
+        next[dateKeyStr] = dayMap;
+      }
+      return next;
+    });
+  };
+
+  const upsertDailyReport = (dateKeyStr, data) => {
+    setDailyReports((prev) => ({ ...prev, [dateKeyStr]: data }));
+  };
+
   const selectedDate = selectedKey ? parseKey(selectedKey) : null;
   const selectedEntry = selectedKey ? workUnits[selectedKey] : null;
   const selectedOff = selectedKey ? offDays[selectedKey] : null;
@@ -569,24 +659,45 @@ export default function App() {
             </div>
           </div>
 
-          <button
-            onClick={() => setShowSitesList(true)}
-            className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg shrink-0"
-            style={{
-              background: C.card,
-              border: `1px solid ${C.border}`,
-              color: C.inkSoft,
-            }}
-          >
-            <Building2 size={16} />
-            <span className="hidden sm:inline">현장 관리</span>
-            <span
-              className="num text-xs px-1.5 py-0.5 rounded-full"
-              style={{ background: C.surface, color: C.muted }}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowTeamModal(true)}
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg shrink-0"
+              style={{
+                background: C.card,
+                border: `1px solid ${C.border}`,
+                color: C.inkSoft,
+              }}
             >
-              {sites.length}
-            </span>
-          </button>
+              <Users size={16} />
+              <span className="hidden sm:inline">팀 관리</span>
+              <span
+                className="num text-xs px-1.5 py-0.5 rounded-full"
+                style={{ background: C.surface, color: C.muted }}
+              >
+                {workers.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setShowSitesList(true)}
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg shrink-0"
+              style={{
+                background: C.card,
+                border: `1px solid ${C.border}`,
+                color: C.inkSoft,
+              }}
+            >
+              <Building2 size={16} />
+              <span className="hidden sm:inline">현장 관리</span>
+              <span
+                className="num text-xs px-1.5 py-0.5 rounded-full"
+                style={{ background: C.surface, color: C.muted }}
+              >
+                {sites.length}
+              </span>
+            </button>
+          </div>
         </header>
 
         <div className="grid lg:grid-cols-5 gap-4 md:gap-5">
@@ -1884,6 +1995,73 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {showTeamModal && (
+        <TeamModal
+          workers={workers}
+          sites={sites}
+          siteById={siteById}
+          teamWork={teamWork}
+          dailyReports={dailyReports}
+          today={today}
+          onClose={() => setShowTeamModal(false)}
+          onAddWorker={() => setEditingWorker({ new: true })}
+          onEditWorker={(w) => setEditingWorker(w)}
+          onDeleteWorker={(w) => setConfirmDeleteWorker(w)}
+          onSetTeamWork={setTeamWorkValue}
+          onSaveReport={upsertDailyReport}
+        />
+      )}
+
+      {editingWorker && (
+        <WorkerEditor
+          worker={editingWorker.new ? null : editingWorker}
+          sites={sites}
+          onClose={() => setEditingWorker(null)}
+          onSave={(w) => {
+            upsertWorker(w);
+            setEditingWorker(null);
+          }}
+        />
+      )}
+
+      {confirmDeleteWorker && (
+        <Modal onClose={() => setConfirmDeleteWorker(null)}>
+          <h3
+            className="text-lg mb-2"
+            style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: C.ink }}
+          >
+            팀원 삭제
+          </h3>
+          <p className="text-sm mb-5" style={{ color: C.inkSoft }}>
+            "{confirmDeleteWorker.name}" 님을 삭제하면 기록된 공수 데이터도 함께 삭제됩니다.
+            계속할까요?
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setConfirmDeleteWorker(null)}
+              className="flex-1 py-3 rounded-lg text-sm"
+              style={{
+                background: C.surface,
+                color: C.inkSoft,
+                border: `1px solid ${C.border}`,
+              }}
+            >
+              취소
+            </button>
+            <button
+              onClick={() => {
+                deleteWorkerCascade(confirmDeleteWorker.id);
+                setConfirmDeleteWorker(null);
+              }}
+              className="flex-1 py-3 rounded-lg text-sm font-semibold"
+              style={{ background: C.accent, color: "#fff" }}
+            >
+              삭제
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2364,6 +2542,479 @@ function Modal({ children, onClose }) {
         }}
       >
         {children}
+      </div>
+    </div>
+  );
+}
+
+// ==================== Team Modal (팀 관리: 팀원/공수체크/작업일보) ====================
+function TeamModal({
+  workers,
+  sites,
+  siteById,
+  teamWork,
+  dailyReports,
+  today,
+  onClose,
+  onAddWorker,
+  onEditWorker,
+  onDeleteWorker,
+  onSetTeamWork,
+  onSaveReport,
+}) {
+  const [tab, setTab] = useState("workers"); // workers | gongsu | report
+  const [selDate, setSelDate] = useState(dateKey(today));
+
+  const activeWorkers = workers.filter((w) => w.active !== false);
+  const dayMap = teamWork[selDate] || {};
+
+  // 월간 합계 (선택한 날짜가 속한 달)
+  const [y, m] = selDate.split("-").map(Number);
+  const monthTotals = useMemo(() => {
+    const totals = {};
+    for (const w of workers) totals[w.id] = 0;
+    for (const [k, map] of Object.entries(teamWork)) {
+      const [ky, km] = k.split("-").map(Number);
+      if (ky === y && km === m) {
+        for (const [wid, val] of Object.entries(map)) {
+          totals[wid] = (totals[wid] || 0) + val;
+        }
+      }
+    }
+    return totals;
+  }, [teamWork, y, m, workers]);
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="flex items-center justify-between mb-4">
+        <h3
+          className="text-lg flex items-center gap-2"
+          style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: C.ink }}
+        >
+          <Users size={18} /> 팀 관리
+        </h3>
+        <button onClick={onClose} style={{ color: C.muted }}>
+          <X size={20} />
+        </button>
+      </div>
+
+      <div
+        className="grid grid-cols-3 gap-1 p-1 rounded-lg mb-4"
+        style={{ background: C.surface }}
+      >
+        <TabButton
+          active={tab === "workers"}
+          onClick={() => setTab("workers")}
+          icon={<Users size={14} />}
+          label="팀원"
+        />
+        <TabButton
+          active={tab === "gongsu"}
+          onClick={() => setTab("gongsu")}
+          icon={<Briefcase size={14} />}
+          label="공수체크"
+        />
+        <TabButton
+          active={tab === "report"}
+          onClick={() => setTab("report")}
+          icon={<ClipboardList size={14} />}
+          label="작업일보"
+        />
+      </div>
+
+      {tab === "workers" && (
+        <div>
+          <button
+            onClick={onAddWorker}
+            className="w-full flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-medium mb-3"
+            style={{ background: C.accent, color: "#fff" }}
+          >
+            <Plus size={16} /> 팀원 추가
+          </button>
+          {activeWorkers.length === 0 && (
+            <p className="text-sm text-center py-6" style={{ color: C.muted }}>
+              아직 등록된 팀원이 없어요
+            </p>
+          )}
+          <div className="space-y-2">
+            {workers.map((w) => {
+              const site = w.siteId ? siteById[w.siteId] : null;
+              return (
+                <div
+                  key={w.id}
+                  className="flex items-center justify-between p-3 rounded-lg"
+                  style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }}
+                >
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: C.ink }}>
+                      {w.name}
+                      {w.active === false && (
+                        <span className="ml-1.5 text-xs" style={{ color: C.muted }}>
+                          (비활성)
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs mt-0.5" style={{ color: C.muted }}>
+                      {w.role || "팀원"}
+                      {site ? ` · ${site.name}` : ""}
+                      {w.rate ? ` · ${won(w.rate)}원/공수` : ""}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => onEditWorker(w)} style={{ color: C.muted }}>
+                      <Pencil size={16} />
+                    </button>
+                    <button onClick={() => onDeleteWorker(w)} style={{ color: C.muted }}>
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {tab === "gongsu" && (
+        <div>
+          <input
+            type="date"
+            value={selDate}
+            onChange={(e) => setSelDate(e.target.value)}
+            className="w-full mb-3 px-3 py-2 rounded-lg text-sm"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+          />
+          {activeWorkers.length === 0 ? (
+            <p className="text-sm text-center py-6" style={{ color: C.muted }}>
+              먼저 "팀원" 탭에서 팀원을 등록해주세요
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {activeWorkers.map((w) => {
+                const val = dayMap[w.id] || 0;
+                return (
+                  <div
+                    key={w.id}
+                    className="p-3 rounded-lg"
+                    style={{ background: C.surface, border: `1px solid ${C.borderSoft}` }}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium" style={{ color: C.ink }}>
+                        {w.name}
+                      </span>
+                      <span className="text-sm num" style={{ color: C.accent, fontWeight: 700 }}>
+                        {val > 0 ? val : "-"}
+                      </span>
+                    </div>
+                    <div className="flex gap-1.5 flex-wrap">
+                      {[0, 0.5, 1, 1.5, 2].map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => onSetTeamWork(selDate, w.id, v === 0 ? null : v)}
+                          className="px-2.5 py-1.5 rounded-md text-xs num"
+                          style={{
+                            background: val === v ? C.accent : C.card,
+                            color: val === v ? "#fff" : C.inkSoft,
+                            border: `1px solid ${val === v ? C.accent : C.border}`,
+                            fontWeight: val === v ? 700 : 500,
+                          }}
+                        >
+                          {v === 0 ? "없음" : v}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div
+                className="mt-4 p-3 rounded-lg"
+                style={{ background: tint(C.accent, 0.08) }}
+              >
+                <div className="text-xs mb-2" style={{ color: C.muted }}>
+                  {y}년 {m}월 팀원별 공수 합계
+                </div>
+                <div className="space-y-1">
+                  {activeWorkers.map((w) => (
+                    <div key={w.id} className="flex justify-between text-sm">
+                      <span style={{ color: C.inkSoft }}>{w.name}</span>
+                      <span className="num" style={{ color: C.ink, fontWeight: 600 }}>
+                        {monthTotals[w.id] || 0}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "report" && (
+        <DailyReportEditor
+          selDate={selDate}
+          setSelDate={setSelDate}
+          sites={sites}
+          workers={activeWorkers}
+          dayMap={dayMap}
+          report={dailyReports[selDate]}
+          onSave={(data) => onSaveReport(selDate, data)}
+        />
+      )}
+    </Modal>
+  );
+}
+
+// ==================== Worker Editor ====================
+function WorkerEditor({ worker, sites, onClose, onSave }) {
+  const [name, setName] = useState(worker?.name || "");
+  const [role, setRole] = useState(worker?.role || "");
+  const [siteId, setSiteId] = useState(worker?.siteId || (sites[0]?.id ?? null));
+  const [rate, setRate] = useState(worker?.rate ? String(worker.rate) : "150000");
+  const [active, setActive] = useState(worker?.active !== false);
+
+  const handleSave = () => {
+    if (!name.trim()) return;
+    onSave({
+      id: worker?.id || genId("w"),
+      name: name.trim(),
+      role: role.trim(),
+      siteId,
+      rate: Number(rate) || 0,
+      active,
+    });
+  };
+
+  return (
+    <Modal onClose={onClose}>
+      <h3
+        className="text-lg mb-4"
+        style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, color: C.ink }}
+      >
+        {worker ? "팀원 수정" : "팀원 추가"}
+      </h3>
+
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs mb-1 block" style={{ color: C.muted }}>
+            이름
+          </label>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="예: 김철수"
+            className="w-full px-3 py-2.5 rounded-lg text-sm"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+          />
+        </div>
+        <div>
+          <label className="text-xs mb-1 block" style={{ color: C.muted }}>
+            직급 / 역할
+          </label>
+          <input
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            placeholder="예: 계장공, 보조"
+            className="w-full px-3 py-2.5 rounded-lg text-sm"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+          />
+        </div>
+        <div>
+          <label className="text-xs mb-1 block" style={{ color: C.muted }}>
+            소속 현장
+          </label>
+          <select
+            value={siteId || ""}
+            onChange={(e) => setSiteId(e.target.value || null)}
+            className="w-full px-3 py-2.5 rounded-lg text-sm"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+          >
+            <option value="">미지정</option>
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs mb-1 block" style={{ color: C.muted }}>
+            공수 단가 (원)
+          </label>
+          <input
+            type="number"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            className="w-full px-3 py-2.5 rounded-lg text-sm num"
+            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+          />
+        </div>
+        <label className="flex items-center gap-2 text-sm" style={{ color: C.inkSoft }}>
+          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+          활성 (현재 근무 중)
+        </label>
+      </div>
+
+      <div className="flex gap-2 mt-5">
+        <button
+          onClick={onClose}
+          className="flex-1 py-3 rounded-lg text-sm"
+          style={{ background: C.surface, color: C.inkSoft, border: `1px solid ${C.border}` }}
+        >
+          취소
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={!name.trim()}
+          className="flex-1 py-3 rounded-lg text-sm font-semibold"
+          style={{ background: C.accent, color: "#fff", opacity: name.trim() ? 1 : 0.5 }}
+        >
+          저장
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ==================== Daily Report Editor (일일 작업일보) ====================
+function DailyReportEditor({ selDate, setSelDate, sites, workers, dayMap, report, onSave }) {
+  const presentWorkerIds = Object.keys(dayMap || {});
+  const presentWorkers = workers.filter((w) => presentWorkerIds.includes(w.id));
+
+  const [siteId, setSiteId] = useState(report?.siteId || sites[0]?.id || null);
+  const [content, setContent] = useState(report?.content || "");
+  const [note, setNote] = useState(report?.note || "");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    setSiteId(report?.siteId || sites[0]?.id || null);
+    setContent(report?.content || "");
+    setNote(report?.note || "");
+    setCopied(false);
+  }, [selDate, report, sites]);
+
+  const siteName = sites.find((s) => s.id === siteId)?.name || "";
+
+  const buildReportText = () => {
+    const lines = [];
+    lines.push(`[일일 작업일보] ${selDate}`);
+    if (siteName) lines.push(`현장: ${siteName}`);
+    lines.push(
+      `참여 인원: ${
+        presentWorkers.length > 0
+          ? presentWorkers.map((w) => `${w.name}(${dayMap[w.id]})`).join(", ")
+          : "없음"
+      }`
+    );
+    lines.push("");
+    lines.push("[작업 내용]");
+    lines.push(content || "(미입력)");
+    if (note.trim()) {
+      lines.push("");
+      lines.push("[특이사항]");
+      lines.push(note);
+    }
+    return lines.join("\n");
+  };
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(buildReportText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  };
+
+  const handleSave = () => {
+    onSave({ siteId, content, note });
+  };
+
+  return (
+    <div>
+      <input
+        type="date"
+        value={selDate}
+        onChange={(e) => setSelDate(e.target.value)}
+        className="w-full mb-3 px-3 py-2 rounded-lg text-sm"
+        style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+      />
+
+      <div className="mb-3">
+        <label className="text-xs mb-1 block" style={{ color: C.muted }}>
+          현장
+        </label>
+        <select
+          value={siteId || ""}
+          onChange={(e) => setSiteId(e.target.value || null)}
+          className="w-full px-3 py-2.5 rounded-lg text-sm"
+          style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+        >
+          {sites.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div
+        className="mb-3 p-3 rounded-lg"
+        style={{ background: tint(C.accent, 0.08) }}
+      >
+        <div className="text-xs mb-1.5" style={{ color: C.muted }}>
+          참여 인원 (해당일 공수입력 기준)
+        </div>
+        <div className="text-sm" style={{ color: C.ink }}>
+          {presentWorkers.length > 0
+            ? presentWorkers.map((w) => `${w.name}(${dayMap[w.id]})`).join(", ")
+            : "공수체크 탭에서 먼저 인원별 공수를 입력해주세요"}
+        </div>
+      </div>
+
+      <div className="mb-3">
+        <label className="text-xs mb-1 block" style={{ color: C.muted }}>
+          작업 내용
+        </label>
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          rows={4}
+          placeholder="오늘 진행한 작업 내용을 적어주세요"
+          className="w-full px-3 py-2.5 rounded-lg text-sm"
+          style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+        />
+      </div>
+
+      <div className="mb-4">
+        <label className="text-xs mb-1 block" style={{ color: C.muted }}>
+          특이사항 (안전·자재·지연 등)
+        </label>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={2}
+          placeholder="없으면 비워두세요"
+          className="w-full px-3 py-2.5 rounded-lg text-sm"
+          style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.ink }}
+        />
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleCopy}
+          className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-lg text-sm"
+          style={{ background: C.surface, color: C.inkSoft, border: `1px solid ${C.border}` }}
+        >
+          {copied ? <Check size={15} /> : <Copy size={15} />}
+          {copied ? "복사됨" : "텍스트 복사"}
+        </button>
+        <button
+          onClick={handleSave}
+          className="flex-1 py-3 rounded-lg text-sm font-semibold"
+          style={{ background: C.accent, color: "#fff" }}
+        >
+          저장
+        </button>
       </div>
     </div>
   );
