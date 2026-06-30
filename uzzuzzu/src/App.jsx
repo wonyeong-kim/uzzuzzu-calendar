@@ -2723,6 +2723,14 @@ function TeamModal({
                         </button>
                       ))}
                     </div>
+
+                    <WorkerMiniCalendar
+                      year={y}
+                      month={m}
+                      workerId={w.id}
+                      teamWork={teamWork}
+                      selDate={selDate}
+                    />
                   </div>
                 );
               })}
@@ -2885,13 +2893,16 @@ function DailyReportEditor({ selDate, setSelDate, sites, workers, dayMap, report
   const [content, setContent] = useState(report?.content || "");
   const [note, setNote] = useState(report?.note || "");
   const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setSiteId(report?.siteId || sites[0]?.id || null);
     setContent(report?.content || "");
     setNote(report?.note || "");
     setCopied(false);
-  }, [selDate, report, sites]);
+    setSaved(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selDate]);
 
   const siteName = sites.find((s) => s.id === siteId)?.name || "";
 
@@ -2927,6 +2938,8 @@ function DailyReportEditor({ selDate, setSelDate, sites, workers, dayMap, report
 
   const handleSave = () => {
     onSave({ siteId, content, note });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
   };
 
   return (
@@ -3010,11 +3023,84 @@ function DailyReportEditor({ selDate, setSelDate, sites, workers, dayMap, report
         </button>
         <button
           onClick={handleSave}
-          className="flex-1 py-3 rounded-lg text-sm font-semibold"
-          style={{ background: C.accent, color: "#fff" }}
+          className="flex-1 flex items-center justify-center gap-1.5 py-3 rounded-lg text-sm font-semibold"
+          style={{ background: saved ? "#2d5f4e" : C.accent, color: "#fff" }}
         >
-          저장
+          {saved ? <Check size={15} /> : null}
+          {saved ? "저장됨" : "저장"}
         </button>
+      </div>
+      {saved && (
+        <p className="text-xs text-center mt-2" style={{ color: "#2d5f4e" }}>
+          작업일보가 저장되었습니다
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ==================== Worker Mini Calendar (개인별 공수 달력) ====================
+function WorkerMiniCalendar({ year, month, workerId, teamWork, selDate }) {
+  const first = new Date(year, month - 1, 1);
+  const startDow = first.getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+
+  const cells = [];
+  for (let i = 0; i < startDow; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  return (
+    <div className="mt-3 pt-3" style={{ borderTop: `1px dashed ${C.borderSoft}` }}>
+      <div className="grid grid-cols-7 gap-0.5 mb-1">
+        {WEEKDAYS.map((w) => (
+          <div
+            key={w}
+            className="text-center"
+            style={{ fontSize: 9, color: C.muted }}
+          >
+            {w}
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5">
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const k = `${year}-${pad(month)}-${pad(d)}`;
+          const val = teamWork[k]?.[workerId];
+          const isSel = k === selDate;
+          const isToday = (() => {
+            const t = new Date();
+            return (
+              t.getFullYear() === year &&
+              t.getMonth() + 1 === month &&
+              t.getDate() === d
+            );
+          })();
+          return (
+            <div
+              key={i}
+              className="aspect-square flex flex-col items-center justify-center rounded"
+              style={{
+                background: val ? tint(C.accent, 0.16) : "transparent",
+                border: isSel
+                  ? `1.5px solid ${C.accent}`
+                  : isToday
+                  ? `1px solid ${C.border}`
+                  : "1px solid transparent",
+              }}
+            >
+              <span style={{ fontSize: 9, color: val ? C.ink : C.muted }}>{d}</span>
+              {val ? (
+                <span
+                  className="num"
+                  style={{ fontSize: 9, color: C.accent, fontWeight: 700, lineHeight: 1 }}
+                >
+                  {val}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
