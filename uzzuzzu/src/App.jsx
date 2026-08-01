@@ -140,6 +140,7 @@ export default function App() {
   // Work tab state
   const [draftSiteId, setDraftSiteId] = useState(null);
   const [inputValue, setInputValue] = useState("");
+  const [lastUsedSiteId, setLastUsedSiteId] = useState(null);
 
   // Off tab state
   const [draftOffType, setDraftOffType] = useState("holiday");
@@ -361,8 +362,8 @@ export default function App() {
 
     for (const id in perSiteMap) {
       const p = perSiteMap[id];
-      p.net = p.gross / 1.033;
-      p.tax = p.gross - p.net;
+      p.tax = p.gross * 0.033;
+      p.net = p.gross - p.tax;
     }
     entries.sort((a, b) => a.date - b.date);
 
@@ -374,8 +375,8 @@ export default function App() {
       totalUnits += perSiteMap[id].totalUnits;
       totalGross += perSiteMap[id].gross;
     }
-    const totalNet = totalGross / 1.033;
-    const totalTax = totalGross - totalNet;
+    const totalTax = totalGross * 0.033;
+    const totalNet = totalGross - totalTax;
     const finalProfit = totalNet - totalExpenses;
 
     const perSite = Object.values(perSiteMap)
@@ -416,7 +417,7 @@ export default function App() {
       setModalTab("off");
     } else {
       setModalTab("work");
-      setDraftSiteId(sites[0]?.id || null);
+      setDraftSiteId(lastUsedSiteId || sites[0]?.id || null);
       setInputValue("");
     }
 
@@ -609,7 +610,7 @@ export default function App() {
     Number.isFinite(previewValue) && previewValue > 0 && draftSite
       ? previewValue * draftSite.rate
       : 0;
-  const previewNet = previewGross / 1.033;
+  const previewNet = previewGross * 0.967;
 
   return (
     <div
@@ -664,10 +665,10 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-1.5 shrink-0">
             <button
               onClick={() => setShowTeamModal(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg shrink-0"
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg"
               style={{
                 background: C.card,
                 border: `1px solid ${C.border}`,
@@ -675,7 +676,7 @@ export default function App() {
               }}
             >
               <Users size={16} />
-              <span className="hidden sm:inline">팀 관리</span>
+              <span>팀 관리</span>
               <span
                 className="num text-xs px-1.5 py-0.5 rounded-full"
                 style={{ background: C.surface, color: C.muted }}
@@ -686,7 +687,7 @@ export default function App() {
 
             <button
               onClick={() => setShowSitesList(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg shrink-0"
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg"
               style={{
                 background: C.card,
                 border: `1px solid ${C.border}`,
@@ -694,7 +695,7 @@ export default function App() {
               }}
             >
               <Building2 size={16} />
-              <span className="hidden sm:inline">현장 관리</span>
+              <span>현장 관리</span>
               <span
                 className="num text-xs px-1.5 py-0.5 rounded-full"
                 style={{ background: C.surface, color: C.muted }}
@@ -1326,7 +1327,7 @@ export default function App() {
                               {e.date.getMonth() + 1}/{e.date.getDate()}
                             </span>
                             <span className="text-xs truncate" style={{ color: C.muted }}>
-                              {expType?.label}
+                              {e.type === "other" && e.otherLabel ? e.otherLabel : expType?.label}
                               {site && ` · ${site.abbr}`}
                             </span>
                           </span>
@@ -1365,7 +1366,7 @@ export default function App() {
         </div>
 
         <footer className="mt-6 text-center text-xs" style={{ color: C.muted }}>
-          실수령 = 공수 × 단가 ÷ 1.033 · 순수익 = 실수령 − 경비 · 자동 저장
+          실수령 = 공수 × 단가 × 96.7% · 순수익 = 실수령 − 경비 · 자동 저장
         </footer>
       </div>
 
@@ -1463,18 +1464,22 @@ export default function App() {
                       className="flex gap-1.5 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1"
                       style={{ scrollSnapType: "x mandatory" }}
                     >
-                      {sites.map((s) => {
+                      {[...sites].reverse().map((s) => {
                         const active = draftSiteId === s.id;
                         return (
                           <button
                             key={s.id}
-                            onClick={() => setDraftSiteId(s.id)}
+                            onClick={() => {
+                              setDraftSiteId(s.id);
+                              setLastUsedSiteId(s.id);
+                            }}
                             className="rounded-lg px-3 py-2 shrink-0 text-left"
                             style={{
                               background: active ? tint(s.color, 0.15) : C.surface,
                               border: `1.5px solid ${active ? s.color : C.border}`,
                               minWidth: 110,
                               scrollSnapAlign: "start",
+                              opacity: active ? 1 : 0.5,
                             }}
                           >
                             <div className="flex items-center gap-1.5 mb-0.5">
@@ -1483,8 +1488,11 @@ export default function App() {
                                 style={{ width: 8, height: 8, background: s.color }}
                               />
                               <span
-                                className="text-sm font-semibold truncate"
-                                style={{ color: active ? s.color : C.ink }}
+                                className="text-sm truncate"
+                                style={{
+                                  color: active ? s.color : C.ink,
+                                  fontWeight: active ? 700 : 500,
+                                }}
                               >
                                 {s.name}
                               </span>
@@ -1622,41 +1630,31 @@ export default function App() {
             <>
               <div className="mb-4">
                 <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
-                  휴무 사유
+                  휴무 사유 (직접 입력)
                 </label>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {OFFDAY_TYPES.map((t) => {
-                    const active = draftOffType === t.id;
-                    return (
-                      <button
-                        key={t.id}
-                        onClick={() => setDraftOffType(t.id)}
-                        className="py-2.5 rounded-lg text-xs"
-                        style={{
-                          background: active ? t.color : C.surface,
-                          color: active ? "#fff" : C.ink,
-                          border: `1px solid ${active ? t.color : C.border}`,
-                          fontWeight: 600,
-                        }}
-                      >
-                        {t.label}
-                      </button>
-                    );
-                  })}
+                <div className="flex gap-1.5 flex-wrap mb-2">
+                  {OFFDAY_TYPES.filter(t => t.id !== "other").map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setDraftOffMemo(t.label)}
+                      className="px-3 py-1.5 rounded-lg text-xs"
+                      style={{
+                        background: draftOffMemo === t.label ? t.color : C.surface,
+                        color: draftOffMemo === t.label ? "#fff" : C.ink,
+                        border: `1px solid ${draftOffMemo === t.label ? t.color : C.border}`,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
                 </div>
-              </div>
-
-              <div className="mb-4">
-                <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
-                  메모 (선택)
-                </label>
-                <textarea
+                <input
                   value={draftOffMemo}
                   onChange={(e) => setDraftOffMemo(e.target.value)}
-                  placeholder="예: 정기 건강검진"
-                  rows={3}
-                  maxLength={100}
-                  className="w-full px-3 py-3 rounded-lg text-sm resize-none"
+                  placeholder="예: 정기 건강검진, 개인 사정 등"
+                  maxLength={50}
+                  className="w-full px-3 py-3 rounded-lg text-sm"
                   style={{
                     background: C.surface,
                     border: `1px solid ${C.border}`,
@@ -1734,7 +1732,7 @@ export default function App() {
                                 className="text-sm font-semibold truncate"
                                 style={{ color: C.ink }}
                               >
-                                {expType?.label}
+                                {exp.type === "other" && exp.otherLabel ? exp.otherLabel : expType?.label}
                               </div>
                               <div className="text-xs" style={{ color: C.muted }}>
                                 {site ? site.name : "공통/미지정"}
@@ -2106,6 +2104,7 @@ function TabButton({ active, onClick, icon, label, badge }) {
 function ExpenseEditModal({ dateKey, expense, sites, siteById, workUnits, onClose, onSave }) {
   const isNew = !expense.id;
   const [type, setType] = useState(expense.type || "transport");
+  const [otherLabel, setOtherLabel] = useState(expense.otherLabel || "");
   const [amount, setAmount] = useState(expense.amount ? String(expense.amount) : "");
   const [memo, setMemo] = useState(expense.memo || "");
 
@@ -2115,13 +2114,14 @@ function ExpenseEditModal({ dateKey, expense, sites, siteById, workUnits, onClos
     expense.siteId !== undefined ? expense.siteId : workEntry ? workEntry.siteId : null
   );
 
-  const canSave = Number(amount) > 0;
+  const canSave = Number(amount) > 0 && (type !== "other" || otherLabel.trim().length > 0);
 
   const handleSave = () => {
     if (!canSave) return;
     onSave({
       id: expense.id,
       type,
+      otherLabel: type === "other" ? otherLabel.trim() : "",
       amount: Math.round(Number(amount)),
       memo: memo.trim(),
       siteId: siteId,
@@ -2175,6 +2175,22 @@ function ExpenseEditModal({ dateKey, expense, sites, siteById, workUnits, onClos
               );
             })}
           </div>
+          {type === "other" && (
+            <input
+              type="text"
+              value={otherLabel}
+              onChange={(e) => setOtherLabel(e.target.value)}
+              placeholder="항목명 직접 입력 (예: 주차비, 공구구입)"
+              maxLength={20}
+              className="mt-2 w-full px-3 py-2.5 rounded-lg text-sm"
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.orange}`,
+                color: C.ink,
+              }}
+              autoFocus
+            />
+          )}
         </div>
 
         <div>
