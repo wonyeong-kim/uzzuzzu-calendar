@@ -22,6 +22,20 @@ import {
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const QUICK_VALUES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
+// 야근 시간 선택지 (시간 단위)
+const OT_OPTIONS = [0.5, 1, 2, 2.5, 3];
+const fmtOt = (h) => {
+  if (!h) return "";
+  const hours = Math.floor(h);
+  const mins = Math.round((h - hours) * 60);
+  if (hours === 0) return `${mins}분`;
+  if (mins === 0) return `${hours}시간`;
+  return `${hours}시간 ${mins}분`;
+};
+// 공수 입력창에서 같이 기록하는 식대/추가경비는 이 id로 저장해서 날짜별로 덮어쓴다
+const wkMealId = (k) => `wk-meal-${k}`;
+const wkExtraId = (k) => `wk-extra-${k}`;
+
 const PALETTE = [
   "#b8391d",
   "#2d5f4e",
@@ -140,6 +154,11 @@ export default function App() {
   // Work tab state
   const [draftSiteId, setDraftSiteId] = useState(null);
   const [inputValue, setInputValue] = useState("");
+  const [lastUsedSiteId, setLastUsedSiteId] = useState(null);
+  const [draftOt, setDraftOt] = useState(0); // 야근 시간 (0 = 없음)
+  const [draftMeal, setDraftMeal] = useState(""); // 그날 식대
+  const [draftExtra, setDraftExtra] = useState(""); // 그날 추가경비
+  const [draftExtraLabel, setDraftExtraLabel] = useState(""); // 추가경비 항목명
 
   // Off tab state
   const [draftOffType, setDraftOffType] = useState("holiday");
@@ -297,6 +316,8 @@ export default function App() {
         site: s,
         workDays: 0,
         totalUnits: 0,
+        otHours: 0,
+        otPay: 0,
         gross: 0,
         net: 0,
         tax: 0,
@@ -313,10 +334,14 @@ export default function App() {
       const site = siteById[e.siteId];
       if (!site) continue;
       const ps = perSiteMap[site.id];
+      const otHours = Number(e.otHours) > 0 ? Number(e.otHours) : 0;
+      const otPay = otHours * (Number(site.otRate) || 0);
       ps.workDays += 1;
       ps.totalUnits += e.value;
-      ps.gross += e.value * site.rate;
-      entries.push({ key: k, date: d, value: e.value, site });
+      ps.otHours += otHours;
+      ps.otPay += otPay;
+      ps.gross += e.value * site.rate + otPay;
+      entries.push({ key: k, date: d, value: e.value, site, otHours, otPay });
     }
 
     // Expenses
@@ -361,21 +386,25 @@ export default function App() {
 
     for (const id in perSiteMap) {
       const p = perSiteMap[id];
-      p.net = p.gross / 1.033;
-      p.tax = p.gross - p.net;
+      p.tax = p.gross * 0.033;
+      p.net = p.gross - p.tax;
     }
     entries.sort((a, b) => a.date - b.date);
 
     let totalDays = 0;
     let totalUnits = 0;
+    let totalOtHours = 0;
+    let totalOtPay = 0;
     let totalGross = 0;
     for (const id in perSiteMap) {
       totalDays += perSiteMap[id].workDays;
       totalUnits += perSiteMap[id].totalUnits;
+      totalOtHours += perSiteMap[id].otHours;
+      totalOtPay += perSiteMap[id].otPay;
       totalGross += perSiteMap[id].gross;
     }
-    const totalNet = totalGross / 1.033;
-    const totalTax = totalGross - totalNet;
+    const totalTax = totalGross * 0.033;
+    const totalNet = totalGross - totalTax;
     const finalProfit = totalNet - totalExpenses;
 
     const perSite = Object.values(perSiteMap)
@@ -387,6 +416,8 @@ export default function App() {
       entries,
       totalDays,
       totalUnits,
+      totalOtHours,
+      totalOtPay,
       totalGross,
       totalNet,
       totalTax,
@@ -407,35 +438,98 @@ export default function App() {
     const existing = workUnits[k];
     const off = offDays[k];
 
+    // 이 날짜에 공수 입력창에서 같이 기록해둔 식대/추가경비
+    const dayList = expenses[k] || [];
+    const linkedMeal = dayList.find((x) => x.id === wkMealId(k));
+    const linkedExtra = dayList.find((x) => x.id === wkExtraId(k));
+
     // Default tab logic
     if (existing) {
       setModalTab("work");
       setDraftSiteId(existing.siteId);
       setInputValue(String(existing.value));
-    } else if (off) {
-      setModalTab("off");
+      setDraftOt(Number(existing.otHours) > 0 ? Number(existing.otHours) : 0);
+      setDraftMeal(linkedMeal ? String(linkedMeal.amount) : "");
+      setDraftExtra(linkedExtra ? String(linkedExtra.amount) : "");
+      setDraftExtraLabel(linkedExtra?.otherLabel || "");
     } else {
-      setModalTab("work");
-      setDraftSiteId(sites[0]?.id || null);
-      setInputValue("");
+      const defSiteId = lastUsedSiteId || sites[0]?.id || null;
+      const defSite = sites.find((s) => s.id === defSiteId);
+      setDraftOt(0);
+      setDraftExtra("");
+      setDraftExtraLabel("");
+      if (off) {
+        setModalTab("off");
+        setDraftMeal("");
+      } else {
+        setModalTab("work");
+        setDraftSiteId(defSiteId);
+        setInputValue("");
+        // 현장에 하루 식대가 설정돼 있으면 미리 채워둔다 (지우거나 바꿀 수 있음)
+        setDraftMeal(defSite?.mealDefault ? String(defSite.mealDefault) : "");
+      }
     }
 
     setDraftOffType(off?.type || "holiday");
     setDraftOffMemo(off?.memo || "");
   };
 
+  // 공수 입력창의 식대/추가경비를 경비 목록에 날짜별로 덮어쓴다 (금액이 비면 삭제)
+  const syncDayExpenses = (k, siteId, mealStr, extraStr, extraLabel) => {
+    const meal = Math.round(Number(mealStr)) || 0;
+    const extra = Math.round(Number(extraStr)) || 0;
+    setExpenses((prev) => {
+      const next = { ...prev };
+      const rest = (next[k] || []).filter(
+        (x) => x.id !== wkMealId(k) && x.id !== wkExtraId(k)
+      );
+      if (meal > 0) {
+        rest.push({
+          id: wkMealId(k),
+          type: "meal",
+          otherLabel: "",
+          amount: meal,
+          memo: "",
+          siteId,
+        });
+      }
+      if (extra > 0) {
+        rest.push({
+          id: wkExtraId(k),
+          type: "other",
+          otherLabel: (extraLabel || "").trim() || "추가경비",
+          amount: extra,
+          memo: "",
+          siteId,
+        });
+      }
+      if (rest.length === 0) delete next[k];
+      else next[k] = rest;
+      return next;
+    });
+  };
+
   const saveDay = () => {
     if (!selectedKey || !draftSiteId) return;
     const v = parseFloat(inputValue);
+    const ot = Number(draftOt) > 0 ? Number(draftOt) : 0;
     setWorkUnits((prev) => {
       const next = { ...prev };
       if (!Number.isFinite(v) || v <= 0) {
         delete next[selectedKey];
       } else {
-        next[selectedKey] = { siteId: draftSiteId, value: Math.round(v * 100) / 100 };
+        const entry = { siteId: draftSiteId, value: Math.round(v * 100) / 100 };
+        if (ot > 0) entry.otHours = ot;
+        next[selectedKey] = entry;
       }
       return next;
     });
+    // 공수가 있을 때만 식대/추가경비를 같이 저장, 공수를 지우면 같이 지움
+    if (Number.isFinite(v) && v > 0) {
+      syncDayExpenses(selectedKey, draftSiteId, draftMeal, draftExtra, draftExtraLabel);
+    } else {
+      syncDayExpenses(selectedKey, draftSiteId, "", "", "");
+    }
     // If saving work, remove off-day
     if (parseFloat(inputValue) > 0) {
       setOffDays((prev) => {
@@ -454,6 +548,8 @@ export default function App() {
       delete next[selectedKey];
       return next;
     });
+    // 이 날 공수와 같이 입력한 식대/추가경비도 함께 삭제
+    syncDayExpenses(selectedKey, null, "", "", "");
     setSelectedKey(null);
   };
 
@@ -468,12 +564,13 @@ export default function App() {
       }
       return next;
     });
-    // If saving off-day, remove work entry
+    // If saving off-day, remove work entry (and the meal/extra entered with it)
     setWorkUnits((prev) => {
       const next = { ...prev };
       delete next[selectedKey];
       return next;
     });
+    syncDayExpenses(selectedKey, null, "", "", "");
     setSelectedKey(null);
   };
 
@@ -605,11 +702,19 @@ export default function App() {
   const selectedExpenses = selectedKey ? expenses[selectedKey] || [] : [];
   const draftSite = draftSiteId ? siteById[draftSiteId] : null;
   const previewValue = parseFloat(inputValue);
-  const previewGross =
+  const previewBase =
     Number.isFinite(previewValue) && previewValue > 0 && draftSite
       ? previewValue * draftSite.rate
       : 0;
-  const previewNet = previewGross / 1.033;
+  const previewOtPay =
+    previewBase > 0 && draftSite && draftOt > 0
+      ? draftOt * (Number(draftSite.otRate) || 0)
+      : 0;
+  const previewGross = previewBase + previewOtPay;
+  const previewTax = previewGross * 0.033;
+  const previewNet = previewGross - previewTax;
+  const previewMeal = Math.round(Number(draftMeal)) || 0;
+  const previewExtra = Math.round(Number(draftExtra)) || 0;
 
   return (
     <div
@@ -664,10 +769,10 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-1.5 shrink-0">
             <button
               onClick={() => setShowTeamModal(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg shrink-0"
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg"
               style={{
                 background: C.card,
                 border: `1px solid ${C.border}`,
@@ -675,7 +780,7 @@ export default function App() {
               }}
             >
               <Users size={16} />
-              <span className="hidden sm:inline">팀 관리</span>
+              <span>팀 관리</span>
               <span
                 className="num text-xs px-1.5 py-0.5 rounded-full"
                 style={{ background: C.surface, color: C.muted }}
@@ -686,7 +791,7 @@ export default function App() {
 
             <button
               onClick={() => setShowSitesList(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg shrink-0"
+              className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg"
               style={{
                 background: C.card,
                 border: `1px solid ${C.border}`,
@@ -694,7 +799,7 @@ export default function App() {
               }}
             >
               <Building2 size={16} />
-              <span className="hidden sm:inline">현장 관리</span>
+              <span>현장 관리</span>
               <span
                 className="num text-xs px-1.5 py-0.5 rounded-full"
                 style={{ background: C.surface, color: C.muted }}
@@ -862,7 +967,7 @@ export default function App() {
                       </div>
 
                       {hasWork && (
-                        <div className="flex-1 flex items-center justify-center">
+                        <div className="flex-1 flex flex-col items-center justify-center gap-0.5">
                           <span
                             className="leading-none num"
                             style={{
@@ -874,6 +979,18 @@ export default function App() {
                           >
                             {fmtUnits(entry.value)}
                           </span>
+                          {Number(entry.otHours) > 0 && (
+                            <span
+                              className="leading-none num"
+                              style={{
+                                color: C.orange,
+                                fontWeight: 700,
+                                fontSize: "clamp(8px, 2.2vw, 11px)",
+                              }}
+                            >
+                              야근{entry.otHours}h
+                            </span>
+                          )}
                         </div>
                       )}
 
@@ -973,6 +1090,9 @@ export default function App() {
                   displayFont
                   big
                 />
+                {summary.totalOtHours > 0 && (
+                  <StatRow label="야근 시간" value={fmtOt(summary.totalOtHours)} unit="" />
+                )}
                 {summary.totalOffDays > 0 && (
                   <StatRow label="휴무 일수" value={summary.totalOffDays} unit="일" />
                 )}
@@ -1064,6 +1184,7 @@ export default function App() {
                       <div className="flex items-baseline justify-between mb-1">
                         <span className="text-xs num" style={{ color: C.muted }}>
                           {p.workDays}일 · {fmtUnits(p.totalUnits)}공수
+                          {p.otHours > 0 ? ` · 야근 ${fmtOt(p.otHours)}` : ""}
                         </span>
                         <span className="text-xs num" style={{ color: C.muted }}>
                           지급 {won(p.gross)}원
@@ -1267,11 +1388,19 @@ export default function App() {
                               >
                                 {fmtUnits(e.value)}
                               </span>
+                              {e.otHours > 0 && (
+                                <span
+                                  className="text-[11px] num"
+                                  style={{ color: C.orange, fontWeight: 600 }}
+                                >
+                                  야근 {fmtOt(e.otHours)}
+                                </span>
+                              )}
                               <span
                                 className="text-xs num"
                                 style={{ color: C.muted, minWidth: 68, textAlign: "right" }}
                               >
-                                {won(e.value * e.site.rate)}원
+                                {won(e.value * e.site.rate + (e.otPay || 0))}원
                               </span>
                             </span>
                           </button>
@@ -1326,7 +1455,7 @@ export default function App() {
                               {e.date.getMonth() + 1}/{e.date.getDate()}
                             </span>
                             <span className="text-xs truncate" style={{ color: C.muted }}>
-                              {expType?.label}
+                              {e.type === "other" && e.otherLabel ? e.otherLabel : expType?.label}
                               {site && ` · ${site.abbr}`}
                             </span>
                           </span>
@@ -1365,7 +1494,7 @@ export default function App() {
         </div>
 
         <footer className="mt-6 text-center text-xs" style={{ color: C.muted }}>
-          실수령 = 공수 × 단가 ÷ 1.033 · 순수익 = 실수령 − 경비 · 자동 저장
+          실수령 = 공수 × 단가 × 96.7% · 순수익 = 실수령 − 경비 · 자동 저장
         </footer>
       </div>
 
@@ -1463,18 +1592,26 @@ export default function App() {
                       className="flex gap-1.5 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1"
                       style={{ scrollSnapType: "x mandatory" }}
                     >
-                      {sites.map((s) => {
+                      {[...sites].reverse().map((s) => {
                         const active = draftSiteId === s.id;
                         return (
                           <button
                             key={s.id}
-                            onClick={() => setDraftSiteId(s.id)}
+                            onClick={() => {
+                              setDraftSiteId(s.id);
+                              setLastUsedSiteId(s.id);
+                              // 새로 입력하는 날이면 이 현장의 하루 식대 기본값으로 바꿔준다
+                              if (!selectedEntry) {
+                                setDraftMeal(s.mealDefault ? String(s.mealDefault) : "");
+                              }
+                            }}
                             className="rounded-lg px-3 py-2 shrink-0 text-left"
                             style={{
                               background: active ? tint(s.color, 0.15) : C.surface,
                               border: `1.5px solid ${active ? s.color : C.border}`,
                               minWidth: 110,
                               scrollSnapAlign: "start",
+                              opacity: active ? 1 : 0.5,
                             }}
                           >
                             <div className="flex items-center gap-1.5 mb-0.5">
@@ -1483,8 +1620,11 @@ export default function App() {
                                 style={{ width: 8, height: 8, background: s.color }}
                               />
                               <span
-                                className="text-sm font-semibold truncate"
-                                style={{ color: active ? s.color : C.ink }}
+                                className="text-sm truncate"
+                                style={{
+                                  color: active ? s.color : C.ink,
+                                  fontWeight: active ? 700 : 500,
+                                }}
                               >
                                 {s.name}
                               </span>
@@ -1548,6 +1688,116 @@ export default function App() {
                     />
                   </div>
 
+                  {/* 야근 시간 */}
+                  <div className="mb-4">
+                    <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
+                      야근 시간 (선택)
+                    </label>
+                    <div className="grid grid-cols-6 gap-1.5">
+                      {[0, ...OT_OPTIONS].map((h) => {
+                        const active = draftOt === h;
+                        return (
+                          <button
+                            key={h}
+                            onClick={() => setDraftOt(h)}
+                            className="py-2.5 rounded-lg num leading-tight"
+                            style={{
+                              background: active ? C.orange : C.surface,
+                              color: active ? "#fff" : C.ink,
+                              border: `1px solid ${active ? C.orange : C.border}`,
+                              fontWeight: 600,
+                              fontSize: "0.72rem",
+                            }}
+                          >
+                            {h === 0 ? "없음" : fmtOt(h)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {draftOt > 0 && draftSite && !(Number(draftSite.otRate) > 0) && (
+                      <p className="text-[11px] mt-1.5" style={{ color: C.orange }}>
+                        이 현장에 야근 시간당 단가가 없어서 시간만 기록돼요. 현장 관리에서
+                        단가를 넣으면 금액에 반영됩니다.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* 식대 / 추가경비 */}
+                  <div className="mb-4">
+                    <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
+                      이날 식대 · 추가경비 (선택)
+                    </label>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="text-sm shrink-0"
+                          style={{ color: C.inkSoft, width: 64 }}
+                        >
+                          🍱 식대
+                        </span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          step="1000"
+                          min="0"
+                          value={draftMeal}
+                          onChange={(e) => setDraftMeal(e.target.value)}
+                          placeholder="예: 40000"
+                          className="flex-1 min-w-0 px-3 py-2.5 rounded-lg text-sm num"
+                          style={{
+                            background: C.surface,
+                            border: `1px solid ${C.border}`,
+                            color: C.ink,
+                          }}
+                        />
+                        <span className="text-xs shrink-0" style={{ color: C.muted }}>
+                          원
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="text-sm shrink-0"
+                          style={{ color: C.inkSoft, width: 64 }}
+                        >
+                          📝 추가
+                        </span>
+                        <input
+                          type="text"
+                          value={draftExtraLabel}
+                          onChange={(e) => setDraftExtraLabel(e.target.value)}
+                          placeholder="항목명 (예: 톨비)"
+                          maxLength={20}
+                          className="px-3 py-2.5 rounded-lg text-sm"
+                          style={{
+                            background: C.surface,
+                            border: `1px solid ${C.border}`,
+                            color: C.ink,
+                            width: "38%",
+                            minWidth: 0,
+                          }}
+                        />
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          step="1000"
+                          min="0"
+                          value={draftExtra}
+                          onChange={(e) => setDraftExtra(e.target.value)}
+                          placeholder="금액"
+                          className="flex-1 min-w-0 px-3 py-2.5 rounded-lg text-sm num"
+                          style={{
+                            background: C.surface,
+                            border: `1px solid ${C.border}`,
+                            color: C.ink,
+                          }}
+                        />
+                        <span className="text-xs shrink-0" style={{ color: C.muted }}>
+                          원
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
                   {Number.isFinite(previewValue) && previewValue > 0 && draftSite && (
                     <div
                       className="mb-4 p-3 rounded-lg space-y-1.5"
@@ -1561,13 +1811,26 @@ export default function App() {
                           {draftSite.name} × {fmtUnits(previewValue)}공수
                         </span>
                         <span className="num" style={{ color: C.inkSoft }}>
-                          {won(previewGross)}원
+                          {won(previewBase)}원
                         </span>
                       </div>
+                      {draftOt > 0 && (
+                        <div className="flex justify-between text-xs">
+                          <span style={{ color: C.muted }}>
+                            야근 {fmtOt(draftOt)}
+                            {Number(draftSite.otRate) > 0
+                              ? ` × ${won(draftSite.otRate)}원`
+                              : ""}
+                          </span>
+                          <span className="num" style={{ color: C.inkSoft }}>
+                            +{won(previewOtPay)}원
+                          </span>
+                        </div>
+                      )}
                       <div className="flex justify-between text-xs">
                         <span style={{ color: C.muted }}>세금 (3.3%)</span>
                         <span className="num" style={{ color: C.muted }}>
-                          −{won(previewGross - previewNet)}원
+                          −{won(previewTax)}원
                         </span>
                       </div>
                       <div
@@ -1582,6 +1845,16 @@ export default function App() {
                           {won(previewNet)}원
                         </span>
                       </div>
+                      {previewMeal + previewExtra > 0 && (
+                        <div className="flex justify-between text-xs">
+                          <span style={{ color: C.orange }}>
+                            식대·추가경비 (경비로 기록)
+                          </span>
+                          <span className="num" style={{ color: C.orange }}>
+                            {won(previewMeal + previewExtra)}원
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1622,41 +1895,31 @@ export default function App() {
             <>
               <div className="mb-4">
                 <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
-                  휴무 사유
+                  휴무 사유 (직접 입력)
                 </label>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {OFFDAY_TYPES.map((t) => {
-                    const active = draftOffType === t.id;
-                    return (
-                      <button
-                        key={t.id}
-                        onClick={() => setDraftOffType(t.id)}
-                        className="py-2.5 rounded-lg text-xs"
-                        style={{
-                          background: active ? t.color : C.surface,
-                          color: active ? "#fff" : C.ink,
-                          border: `1px solid ${active ? t.color : C.border}`,
-                          fontWeight: 600,
-                        }}
-                      >
-                        {t.label}
-                      </button>
-                    );
-                  })}
+                <div className="flex gap-1.5 flex-wrap mb-2">
+                  {OFFDAY_TYPES.filter(t => t.id !== "other").map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => setDraftOffMemo(t.label)}
+                      className="px-3 py-1.5 rounded-lg text-xs"
+                      style={{
+                        background: draftOffMemo === t.label ? t.color : C.surface,
+                        color: draftOffMemo === t.label ? "#fff" : C.ink,
+                        border: `1px solid ${draftOffMemo === t.label ? t.color : C.border}`,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
                 </div>
-              </div>
-
-              <div className="mb-4">
-                <label className="text-xs mb-2 block font-medium" style={{ color: C.muted }}>
-                  메모 (선택)
-                </label>
-                <textarea
+                <input
                   value={draftOffMemo}
                   onChange={(e) => setDraftOffMemo(e.target.value)}
-                  placeholder="예: 정기 건강검진"
-                  rows={3}
-                  maxLength={100}
-                  className="w-full px-3 py-3 rounded-lg text-sm resize-none"
+                  placeholder="예: 정기 건강검진, 개인 사정 등"
+                  maxLength={50}
+                  className="w-full px-3 py-3 rounded-lg text-sm"
                   style={{
                     background: C.surface,
                     border: `1px solid ${C.border}`,
@@ -1734,7 +1997,7 @@ export default function App() {
                                 className="text-sm font-semibold truncate"
                                 style={{ color: C.ink }}
                               >
-                                {expType?.label}
+                                {exp.type === "other" && exp.otherLabel ? exp.otherLabel : expType?.label}
                               </div>
                               <div className="text-xs" style={{ color: C.muted }}>
                                 {site ? site.name : "공통/미지정"}
@@ -2106,6 +2369,7 @@ function TabButton({ active, onClick, icon, label, badge }) {
 function ExpenseEditModal({ dateKey, expense, sites, siteById, workUnits, onClose, onSave }) {
   const isNew = !expense.id;
   const [type, setType] = useState(expense.type || "transport");
+  const [otherLabel, setOtherLabel] = useState(expense.otherLabel || "");
   const [amount, setAmount] = useState(expense.amount ? String(expense.amount) : "");
   const [memo, setMemo] = useState(expense.memo || "");
 
@@ -2115,13 +2379,14 @@ function ExpenseEditModal({ dateKey, expense, sites, siteById, workUnits, onClos
     expense.siteId !== undefined ? expense.siteId : workEntry ? workEntry.siteId : null
   );
 
-  const canSave = Number(amount) > 0;
+  const canSave = Number(amount) > 0 && (type !== "other" || otherLabel.trim().length > 0);
 
   const handleSave = () => {
     if (!canSave) return;
     onSave({
       id: expense.id,
       type,
+      otherLabel: type === "other" ? otherLabel.trim() : "",
       amount: Math.round(Number(amount)),
       memo: memo.trim(),
       siteId: siteId,
@@ -2175,6 +2440,22 @@ function ExpenseEditModal({ dateKey, expense, sites, siteById, workUnits, onClos
               );
             })}
           </div>
+          {type === "other" && (
+            <input
+              type="text"
+              value={otherLabel}
+              onChange={(e) => setOtherLabel(e.target.value)}
+              placeholder="항목명 직접 입력 (예: 주차비, 공구구입)"
+              maxLength={20}
+              className="mt-2 w-full px-3 py-2.5 rounded-lg text-sm"
+              style={{
+                background: C.surface,
+                border: `1px solid ${C.orange}`,
+                color: C.ink,
+              }}
+              autoFocus
+            />
+          )}
         </div>
 
         <div>
@@ -2299,6 +2580,10 @@ function SiteEditModal({ site, onClose, onSave, existingColors }) {
   const [name, setName] = useState(site?.name || "");
   const [abbr, setAbbr] = useState(site?.abbr || "");
   const [rate, setRate] = useState(site?.rate ? String(site.rate) : "200000");
+  const [otRate, setOtRate] = useState(site?.otRate ? String(site.otRate) : "");
+  const [mealDefault, setMealDefault] = useState(
+    site?.mealDefault ? String(site.mealDefault) : ""
+  );
   const [color, setColor] = useState(
     site?.color ||
       PALETTE.find((c) => !existingColors.includes(c)) ||
@@ -2321,6 +2606,8 @@ function SiteEditModal({ site, onClose, onSave, existingColors }) {
       name: name.trim(),
       abbr: abbr.trim().slice(0, 3),
       rate: Number(rate),
+      otRate: Number(otRate) > 0 ? Math.round(Number(otRate)) : 0,
+      mealDefault: Number(mealDefault) > 0 ? Math.round(Number(mealDefault)) : 0,
       color,
     });
   };
@@ -2435,6 +2722,60 @@ function SiteEditModal({ site, onClose, onSave, existingColors }) {
               </button>
             ))}
           </div>
+        </div>
+
+        <div>
+          <label className="text-xs mb-1.5 block font-medium" style={{ color: C.muted }}>
+            야근 시간당 단가 (원, 선택)
+          </label>
+          <input
+            type="number"
+            inputMode="numeric"
+            step="1000"
+            min="0"
+            value={otRate}
+            onChange={(e) => setOtRate(e.target.value)}
+            placeholder="예: 44000 (비우면 야근 금액 없음)"
+            className="w-full px-3 py-3 rounded-lg num"
+            style={{
+              background: C.surface,
+              border: `1px solid ${C.border}`,
+              color: C.ink,
+              fontSize: "1rem",
+              fontFamily: FONT_DISPLAY,
+              fontWeight: 600,
+            }}
+          />
+          <p className="text-[11px] mt-1" style={{ color: C.muted }}>
+            공수 입력 시 야근 시간을 고르면 시간 × 이 단가가 지급액에 더해져요.
+          </p>
+        </div>
+
+        <div>
+          <label className="text-xs mb-1.5 block font-medium" style={{ color: C.muted }}>
+            하루 식대 기본값 (원, 선택)
+          </label>
+          <input
+            type="number"
+            inputMode="numeric"
+            step="1000"
+            min="0"
+            value={mealDefault}
+            onChange={(e) => setMealDefault(e.target.value)}
+            placeholder="예: 40000"
+            className="w-full px-3 py-3 rounded-lg num"
+            style={{
+              background: C.surface,
+              border: `1px solid ${C.border}`,
+              color: C.ink,
+              fontSize: "1rem",
+              fontFamily: FONT_DISPLAY,
+              fontWeight: 600,
+            }}
+          />
+          <p className="text-[11px] mt-1" style={{ color: C.muted }}>
+            넣어두면 이 현장 공수를 입력할 때 식대 칸이 자동으로 채워져요.
+          </p>
         </div>
 
         <div>
